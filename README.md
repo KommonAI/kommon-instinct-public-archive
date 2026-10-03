@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/brand/wordmark.png" alt="Open Instinct" width="640"></p>
+
 # Open Instinct
 
 An open-source personal agent you text. It lives on its own computer, does real tasks for you, and coordinates with the agents of the people you trust. It is a from-scratch, documented clone of [Instinct](docs/research/INSTINCT.md), the invite-only personal agent that raised $1B in September 2026, built so anyone can run one.
@@ -6,14 +8,7 @@ You text it on iMessage. It books the table, moves the meeting, checks you into 
 
 **Name.** Merit Systems publishes an unrelated project called [OpenInstinct](https://github.com/Merit-Systems/OpenInstinct). This project is Open Instinct (two words, npm scope `@open-instinct/*`). It is not affiliated with Merit Systems or with Instinct.
 
-```
-you  ──iMessage──▶  Inkbox  ──webhook──▶  gateway  ──wake──▶  your agent (Maritime microVM, own Linux desktop)
-                                                                   │  Pi agent loop · trust tiers · memory · schedules · audit
-                                                                   ├─ computer: Chromium, LibreOffice, files
-                                                                   ├─ apps: Gmail, Calendar, … via Composio
-                                                                   ├─ payments: one-time cards via Stripe Link
-                                                                   └─ network: other Open Instincts over A2A
-```
+<p align="center"><img src="docs/assets/architecture.svg" alt="How the pieces fit" width="900"></p>
 
 ## What it does
 
@@ -25,6 +20,8 @@ you  ──iMessage──▶  Inkbox  ──webhook──▶  gateway  ──wak
 | "Buy the socks in my cart" | Gets the checkout to a final total, asks Link for a one-time card for that exact amount, waits for you to approve in Link, types the card in |
 | "Text me every morning at 7 with my day" | Creates a schedule; Maritime wakes it at 6:59 even though it slept all night |
 | "Sam is my partner" | Moves Sam to the partner tier: calendar read, bookings with your approval, location |
+
+<p align="center"><img src="docs/assets/brand/hero.png" alt="A phone, an open ring, a laptop" width="760"></p>
 
 ## Why this exists
 
@@ -43,7 +40,7 @@ Instinct showed that a personal agent should be a phone number, not an app, and 
 
 ## Quick start
 
-Three ways to run it. All need Node 22.19 or newer and pnpm 10.
+Three ways to run it. All need Node 22.19 or newer and pnpm 10. You bring your own keys; [docs/KEYS.md](docs/KEYS.md) lists which ones each setup needs and how to get them. No key is ever stored in this repository.
 
 ### 1. Try it locally (no phone number yet)
 
@@ -93,6 +90,8 @@ The full list is in [deploy/.env.example](deploy/.env.example) and [docs/ARCHITE
 
 ## The trusted network
 
+<p align="center"><img src="docs/assets/tiers.svg" alt="Trust tiers" width="820"></p>
+
 Six tiers, one table, enforced in code before any tool runs:
 
 | | owner | partner | family | friend | contact | stranger |
@@ -130,6 +129,7 @@ docs/               architecture, permissions, protocol, build brief, research
 - [Architecture](docs/ARCHITECTURE.md): how the pieces fit, message flow, tools, state on disk, configuration
 - [Permissions](docs/PERMISSIONS.md): tiers, capabilities, grants, spend policy, approvals, the twice-enforced guard
 - [Protocol](docs/PROTOCOL.md): how two agents coordinate (OIP/1 over A2A), group plans
+- [Keys](docs/KEYS.md): which accounts and keys you need, how to get them, how to swap providers
 - [Build brief](docs/BUILD-BRIEF.md): the exact library facts implementers need
 - [Examples](examples/README.md): run the pieces without a phone, a VM or an API key
 - Package guides: [cli](packages/cli/README.md) · [server](packages/server/README.md) · [gateway](packages/gateway/README.md) · [inkbox](packages/inkbox/README.md) · [computer](packages/computer/README.md) · [apps](packages/apps/README.md) · [network](packages/network/README.md) · [payments](packages/payments/README.md) · [skills](skills/README.md)

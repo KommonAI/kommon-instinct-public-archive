@@ -74,7 +74,7 @@ through someone else's Instinct, it names them, never that Instinct's owner, and
 | Intent | Payload | Typical reply |
 |---|---|---|
 | `propose_times` | `slots[]`, `place_hint?`, `duration_min?` | `accept` with one slot, or `propose_times` back |
-| `request_freebusy` | `window {from,to}`, `granularity_min` | `inform` with `busy[]` (never titles) |
+| `request_freebusy` | `window {from,to}` | `inform` with `busy[]` (never titles) |
 | `accept` | `slot`, `place?`, `note?` | `confirm` |
 | `decline` | `reason?`, `alternatives?` | end or `propose_times` |
 | `confirm` | `summary`, `calendar_event?` | end |

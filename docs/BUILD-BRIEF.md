@@ -11,7 +11,7 @@ This file holds the exact library facts you need so you do not have to rediscove
 - Tests: vitest in `packages/<name>/test/*.test.ts`.
 - Node 22 has global `fetch`, `crypto.subtle`, `node:sqlite` is experimental; use JSON files for state.
 
-## Pi (the agent runtime) — versions 1.0.1, scope `@earendil-works`
+## Pi (the agent runtime) : versions 1.0.1, scope `@earendil-works`
 
 VERIFIED 2026-10-03 by running code (see scratch probe): the main entry of `@earendil-works/pi-ai` does NOT export `getModel`/`streamSimple`/`completeSimple`. Those live in the deprecated `@earendil-works/pi-ai/compat` entry. The v1 API is a `Models` collection:
 
@@ -73,7 +73,7 @@ const tools = await client.listTools(); const r = await client.callTool(name, ar
 ```
 Wrap MCP tools as AgentTools exactly as pi-mcp's README shows (Type.Unsafe({...inputSchema, type:"object", properties: inputSchema.properties ?? {}})).
 
-## Inkbox — `@inkbox/sdk` 0.7.13 (Node >= 22). REST base `https://inkbox.ai/api/v1`, header `X-API-Key`.
+## Inkbox : `@inkbox/sdk` 0.7.13 (Node >= 22). REST base `https://inkbox.ai/api/v1`, header `X-API-Key`.
 
 ```ts
 import { Inkbox, verifyWebhook } from "@inkbox/sdk";
@@ -102,7 +102,7 @@ Mail send REST: `POST /api/v1/mailboxes/{email}/messages { recipients:{to:[...]}
 A2A worker REST: `GET /api/v1/identities/{handle}/a2a/tasks?state=submitted`, `GET .../tasks/{id}`, `POST .../tasks/{id}/reply { intent, parts }`.
 A2A caller JSON-RPC: `POST https://inkbox.ai/a2a/{peer}` headers `X-API-Key` (identity key), `A2A-Version: 1.0`; method `SendMessage` params `{ message: { messageId, role: "ROLE_USER", parts: [{text},{data}], contextId?, taskId? }, configuration: { returnImmediately: true } }`.
 
-## Maritime — hosting, desktop, SDK
+## Maritime : hosting, desktop, SDK
 
 BYO container contract: bind `0.0.0.0:$PORT` (Maritime injects PORT, currently 18789; default 8080 locally), `GET /health` → 200 JSON, `POST /chat` body `{ message, source?, conversation_id? }` → `{ response }` within 30 s, persist under `/data`, image must have `python3` on PATH, optional `GET /schedules` → array of `{ id, nextRunAt?, cron?, tz?, prompt?, enabled }`.
 Agents reach the platform with env `MARITIME_AGENT_ID`, `MARITIME_BACKEND_URL`, `MARITIME_INTERNAL_TOKEN`; push schedules with `POST $MARITIME_BACKEND_URL/api/agents/internal/schedules` headers `X-Maritime-Agent-Id`, `Authorization: Bearer $MARITIME_INTERNAL_TOKEN`, body `{ schedules: [...] }`.
@@ -110,7 +110,7 @@ In-VM desktop (agent created with `desktop: true`): `maritime-computer-mcp` on P
 Hosted Computers MCP: `https://mcp.maritime.sh/mcp/u/{externalUserId}` with `Authorization: Bearer mk_...` (key needs the `computers` scope); tools `get_computer {user_id?}`, `computer {computer_id, action, ...}`, `computer_batch`, `run_shell`, `read_file`, `write_file`, `request_takeover {computer_id, reason, wait?}`, `takeover_status`, `close_computer`. Screenshots are 1200 px wide; coordinates are pixels of the last screenshot.
 Control plane: `https://api.maritime.sh`, `Authorization: Bearer mk_...`. `maritime-sdk` 0.9.0: `new Maritime({ apiKey })`, `maritime.agents.create({ name, externalId, imageName, instructions, env: [{key,value,secret}], idleTtlSeconds })` (the SDK type lacks `desktop`, `exposedPort`, `healthCheckPath`, `framework`, `useMaritimeLlm`: POST `/api/agents` directly with camelCase JSON `{ name, framework: "custom", imageName, exposedPort: 8080, healthCheckPath: "/health", desktop: true, externalId, initialEnvVars: [{key, value, isSecret}], idleTtlSeconds, instructions }` when you need them), `maritime.agents.chat(id, message, { conversationId })`, `maritime.agents.list({ externalId })`, `maritime.keys.create({ name, scopes })`. Creating an agent debits the wallet. The agent's own exposed port is private; only `/chat` through the API reaches it.
 
-## Composio — `@composio/core` 0.22.0
+## Composio : `@composio/core` 0.22.0
 
 ```ts
 import { Composio } from "@composio/core";

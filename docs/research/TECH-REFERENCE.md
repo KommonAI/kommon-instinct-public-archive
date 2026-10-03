@@ -796,7 +796,7 @@ Maritime (code at `/Users/mariagorskikh/maritime`, live at `https://api.maritime
 
 ### 3.1 Agents API
 
-`POST /api/agents` needs a Bearer `mk_` key with the `provision` scope; 30 creates per minute ([agents.py](file:///Users/mariagorskikh/maritime/backend/app/routers/agents.py)).
+`POST /api/agents` needs a Bearer `mk_` key with the `provision` scope; 30 creates per minute ([agents.py](Maritime repo: `backend/app/routers/agents.py`)).
 
 ```bash
 curl -X POST https://api.maritime.sh/api/agents \
@@ -817,15 +817,15 @@ curl -X POST https://api.maritime.sh/api/agents \
   }'
 ```
 
-`AgentCreate` fields (camelCase) ([schemas/agent.py](file:///Users/mariagorskikh/maritime/backend/app/schemas/agent.py)): `name` (required), `description`, `externalId`, `instructions`, `framework` (default `custom`), `templateId`, `imageName`, `githubRepo`, `branch`, `initialEnvVars[{key, value, isSecret=true}]`, `useMaritimeLlm`, `exposedPort`, `healthCheckPath`, `hasWebUi`, `publicWeb`, `desktop` (forces 4 GiB and 2 vCPU), `memMb`, `vcpus`, `idleTtlSeconds` (0 = always-on), `diskGb`, `computeMinutesLimit`, `addOns: ["identity"|"browser"]`, `gatewayPassword`, `serverId`, `uploadS3Key`, `autoPair`.
+`AgentCreate` fields (camelCase) ([schemas/agent.py](Maritime repo: `backend/app/schemas/agent.py`)): `name` (required), `description`, `externalId`, `instructions`, `framework` (default `custom`), `templateId`, `imageName`, `githubRepo`, `branch`, `initialEnvVars[{key, value, isSecret=true}]`, `useMaritimeLlm`, `exposedPort`, `healthCheckPath`, `hasWebUi`, `publicWeb`, `desktop` (forces 4 GiB and 2 vCPU), `memMb`, `vcpus`, `idleTtlSeconds` (0 = always-on), `diskGb`, `computeMinutesLimit`, `addOns: ["identity"|"browser"]`, `gatewayPassword`, `serverId`, `uploadS3Key`, `autoPair`.
 
 `templateId` overrides `framework` and `imageName`. Valid ids: `openclaw`, `zeroclaw`, `hermes`, `openclaw_identity`, `openclaw_browser`, `hermes_identity`, `claude_code`, `codex`, `flue`, `dsh`, `desktop`, `maritime-operator`.
 
-The `instructions` persona is stored as env `MARITIME_INSTRUCTIONS` and written into `/data/.openclaw/workspace/AGENTS.md` under `# Your role` between `<!-- maritime-instructions-v1 c:<cksum> -->` markers ([maritime-init.sh](file:///Users/mariagorskikh/maritime/scripts/maritime-init.sh)).
+The `instructions` persona is stored as env `MARITIME_INSTRUCTIONS` and written into `/data/.openclaw/workspace/AGENTS.md` under `# Your role` between `<!-- maritime-instructions-v1 c:<cksum> -->` markers ([maritime-init.sh](Maritime repo: `scripts/maritime-init.sh`)).
 
 Platform-injected env: `PORT=18789` (custom/docker frameworks), `OPENAI_API_KEY=mllm_<agent>_<hmac>` with `OPENAI_BASE_URL=https://api.maritime.sh/api/llm/v1` (metered proxy), `OPENCLAW_GATEWAY_PASSWORD`, `MARITIME_AGENT_ID`, `MARITIME_BACKEND_URL`, `MARITIME_INTERNAL_TOKEN` (HMAC-SHA256 of the agent id with the nextauth secret), `MARITIME_DESKTOP=1`, `MARITIME_TELEGRAM_*`, `INKBOX_*`.
 
-Lifecycle routes: `/start`, `/stop`, `/restart`, `/sleep`, `/reset-to-upstream`, `/resize`, `/duplicate`. Triggers: `POST /api/agents/{id}/triggers {type: cron|webhook|telegram|discord|email|whatsapp|gmail, config, enabled}`; cron config `{schedule|cron, tz, prompt}` ([trigger.py](file:///Users/mariagorskikh/maritime/backend/app/models/trigger.py)). Capabilities: `POST /api/agents/{id}/capabilities {capability: identity|browser, action: add|remove}` ([capabilities.py](file:///Users/mariagorskikh/maritime/backend/app/routers/capabilities.py)). Identity lookup: `GET /api/inkbox/{agent_id}`.
+Lifecycle routes: `/start`, `/stop`, `/restart`, `/sleep`, `/reset-to-upstream`, `/resize`, `/duplicate`. Triggers: `POST /api/agents/{id}/triggers {type: cron|webhook|telegram|discord|email|whatsapp|gmail, config, enabled}`; cron config `{schedule|cron, tz, prompt}` ([trigger.py](Maritime repo: `backend/app/models/trigger.py`)). Capabilities: `POST /api/agents/{id}/capabilities {capability: identity|browser, action: add|remove}` ([capabilities.py](Maritime repo: `backend/app/routers/capabilities.py`)). Identity lookup: `GET /api/inkbox/{agent_id}`.
 
 API keys: `POST /api/v1/keys {name, scopes, expires_in_days, project_id}` returns `raw_key` once. Scopes: `provision`, `deploy`, `secrets`, `manage` (wildcard), `computers` ([openapi.json](https://api.maritime.sh/openapi.json)).
 
@@ -838,9 +838,9 @@ curl -X POST https://api.maritime.sh/api/agents/$AGENT/chat \
 # -> {"response":"..."}  or  {"response":null,"error":"..."}
 ```
 
-`deploy` scope. 429 and 503 carry `Retry-After`. The call routes through `handle_gateway_message(source="cli")`, which auto-wakes the VM ([chat.py](file:///Users/mariagorskikh/maritime/backend/app/routers/chat.py)).
+`deploy` scope. 429 and 503 carry `Retry-After`. The call routes through `handle_gateway_message(source="cli")`, which auto-wakes the VM ([chat.py](Maritime repo: `backend/app/routers/chat.py`)).
 
-For a bring-your-own image (which Open Instinct is), Maritime POSTs to your container ([BYO_AGENT.md](file:///Users/mariagorskikh/maritime/docs/BYO_AGENT.md)):
+For a bring-your-own image (which Open Instinct is), Maritime POSTs to your container ([BYO_AGENT.md](Maritime repo: `docs/BYO_AGENT.md`)):
 
 - Bind `0.0.0.0:$PORT` (18789). Port 8080 is taken inside the VM.
 - `GET /health` returns 2xx.
@@ -848,11 +848,11 @@ For a bring-your-own image (which Open Instinct is), Maritime POSTs to your cont
 - Persist to `/data`. Ship `python3`. Optional `GET /schedules`.
 - LLM credentials are only injected when `useMaritimeLlm: true` is set at create or `POST /reset-llm` is called later.
 
-Harness templates (`claude_code`, `codex`) register as `framework="custom"`, `has_web_ui=False` and wrap a CLI behind this contract; each `conversation_id` maps to one persisted session under `/data` ([harness-templates.md](file:///Users/mariagorskikh/maritime/docs/features/harness-templates.md)). Open Instinct can be published the same way.
+Harness templates (`claude_code`, `codex`) register as `framework="custom"`, `has_web_ui=False` and wrap a CLI behind this contract; each `conversation_id` maps to one persisted session under `/data` ([harness-templates.md](Maritime repo: `docs/features/harness-templates.md`)). Open Instinct can be published the same way.
 
 ### 3.3 Env vars and secrets
 
-`secrets` scope ([env.py](file:///Users/mariagorskikh/maritime/backend/app/routers/env.py)):
+`secrets` scope ([env.py](Maritime repo: `backend/app/routers/env.py`)):
 
 ```
 GET    /api/agents/{id}/env
@@ -866,20 +866,20 @@ Secrets are AES-encrypted with `app.services.crypto.encrypt`; duplicates yield 4
 
 ### 3.4 Templates and custom images
 
-Templates are a Python dict in [template_registry.py](file:///Users/mariagorskikh/maritime/backend/app/services/template_registry.py): `AgentTemplate(id, name, framework, image, env_required, hidden, has_web_ui)`. Current images: `ghcr.io/openclaw/openclaw:2026.7.1`, `ghcr.io/maritime-sh/claude-code-agent:2026.8.11`, `ghcr.io/maritime-sh/codex-agent:2026.9.11`, `ghcr.io/maritime-sh/desktop-agent:2026.8.29`, `ghcr.io/maritime-sh/openclaw-identity:2026.7.28`.
+Templates are a Python dict in [template_registry.py](Maritime repo: `backend/app/services/template_registry.py`): `AgentTemplate(id, name, framework, image, env_required, hidden, has_web_ui)`. Current images: `ghcr.io/openclaw/openclaw:2026.7.1`, `ghcr.io/maritime-sh/claude-code-agent:2026.8.11`, `ghcr.io/maritime-sh/codex-agent:2026.9.11`, `ghcr.io/maritime-sh/desktop-agent:2026.8.29`, `ghcr.io/maritime-sh/openclaw-identity:2026.7.28`.
 
 Two ways to ship Open Instinct:
 
 1. `framework: "custom"` + `imageName: "ghcr.io/<you>/open-instinct-agent:<tag>"` + `useMaritimeLlm: true`. Works today with no Maritime change.
 2. A new registry entry (`instinct`), which also unlocks the dashboard card.
 
-The `openclaw_identity` Dockerfile is the pattern for baking in the Inkbox plugin: `FROM ghcr.io/openclaw/openclaw:2026.7.1`, clone `inkbox-ai/openclaw-plugin` at a pinned SHA into `/opt/inkbox-openclaw-plugin`, `OPENCLAW_HEADLESS=true` ([Dockerfile](file:///Users/mariagorskikh/maritime/backend/templates/openclaw_identity/Dockerfile)). At boot `maritime-init.sh` runs `openclaw plugins install -l /opt/inkbox-openclaw-plugin` once and writes `channels.inkbox.{enabled, apiKey, identity, signingKey, baseUrl}`.
+The `openclaw_identity` Dockerfile is the pattern for baking in the Inkbox plugin: `FROM ghcr.io/openclaw/openclaw:2026.7.1`, clone `inkbox-ai/openclaw-plugin` at a pinned SHA into `/opt/inkbox-openclaw-plugin`, `OPENCLAW_HEADLESS=true` ([Dockerfile](Maritime repo: `backend/templates/openclaw_identity/Dockerfile`)). At boot `maritime-init.sh` runs `openclaw plugins install -l /opt/inkbox-openclaw-plugin` once and writes `channels.inkbox.{enabled, apiKey, identity, signingKey, baseUrl}`.
 
 MCP servers are injected into `/data/.openclaw/openclaw.json` under `mcp.servers.<name> = {command, args, env}` (gmail, google-workspace, browserbase, computer). A Composio or Maritime Computers MCP goes in the same place. For a custom image you own the config, so write it yourself.
 
 ### 3.5 Files, exec and file sharing
 
-`deploy` scope; wakes sleeping agents; 100 MB cap ([agent-files-api.md](file:///Users/mariagorskikh/maritime/docs/features/agent-files-api.md)):
+`deploy` scope; wakes sleeping agents; 100 MB cap ([agent-files-api.md](Maritime repo: `docs/features/agent-files-api.md`)):
 
 ```
 GET    /api/agents/{id}/files/list?path=
@@ -895,11 +895,11 @@ POST   /api/agents/{id}/exec                {"command": "ls /data" | ["ls","/dat
 
 Upload without `dest_dir` is a chat attachment: it lands at `/data/.openclaw/workspace/inbox/<ts>-<name>` and the agent gets a `/chat` system message.
 
-Agent-to-user files: run `maritime-share <absolute-path> [--title] [--message]` inside the VM and paste the ```maritime-file fence verbatim. The fence JSON needs `path` and `name`; `size`, `mime`, `title`, `message` are optional ([FILE_SHARING.md](file:///Users/mariagorskikh/maritime/docs/FILE_SHARING.md)). FILE_SHARING.md says 25 MiB while the public files doc says 100 MB; treat 25 MiB as the safe bound.
+Agent-to-user files: run `maritime-share <absolute-path> [--title] [--message]` inside the VM and paste the ```maritime-file fence verbatim. The fence JSON needs `path` and `name`; `size`, `mime`, `title`, `message` are optional ([FILE_SHARING.md](Maritime repo: `docs/FILE_SHARING.md`)). FILE_SHARING.md says 25 MiB while the public files doc says 100 MB; treat 25 MiB as the safe bound.
 
 ### 3.6 Schedules and heartbeats
 
-The agent owns its schedule; Maritime mirrors it into `triggers` rows and wakes the VM about 10 s early ([schedule-sync.md](file:///Users/mariagorskikh/maritime/docs/features/schedule-sync.md)). MARITIME.md puts it bluntly: "You do not keep running between turns."
+The agent owns its schedule; Maritime mirrors it into `triggers` rows and wakes the VM about 10 s early ([schedule-sync.md](Maritime repo: `docs/features/schedule-sync.md`)). MARITIME.md puts it bluntly: "You do not keep running between turns."
 
 OpenClaw-style: `agents.defaults.heartbeat.every` in `/data/.openclaw/openclaw.json` (`"30m"`, `"1h"`, `"0m"` disables). Intervals must divide the next unit evenly; "13m", "45m", "7h" are silently dropped. Cron: `/data/.openclaw/cron/jobs.json` as `[{id, name, enabled, cron, tz}]`.
 
@@ -919,11 +919,11 @@ curl -X POST "$MARITIME_BACKEND_URL/api/agents/internal/schedules" \
 
 ### 3.7 Computers MCP
 
-Production `https://mcp.maritime.sh/mcp` (healthz returned `{"ok":true}` on 2026-10-03); staging `https://mcp-staging-6505.up.railway.app/mcp`. Stateless Streamable HTTP built on `@modelcontextprotocol/sdk` 1.30.0 and Express 5 ([server.ts](file:///Users/mariagorskikh/maritime/mcp/src/server.ts)). `GET`/`DELETE` on `/mcp` return 405.
+Production `https://mcp.maritime.sh/mcp` (healthz returned `{"ok":true}` on 2026-10-03); staging `https://mcp-staging-6505.up.railway.app/mcp`. Stateless Streamable HTTP built on `@modelcontextprotocol/sdk` 1.30.0 and Express 5 ([server.ts](Maritime repo: `mcp/src/server.ts`)). `GET`/`DELETE` on `/mcp` return 405.
 
-Auth: `Authorization: Bearer mk_...`. The key must carry `computers`, `manage` or `*` ([auth.py](file:///Users/mariagorskikh/maritime/backend/app/computers/auth.py)). A computers-only key is refused on the agents API. Every key is verified with `GET /api/v1/computers?externalUserId=__auth_probe__` and cached 60 s. Pin a user with `/mcp/u/{externalUserId}` or header `X-Maritime-User`.
+Auth: `Authorization: Bearer mk_...`. The key must carry `computers`, `manage` or `*` ([auth.py](Maritime repo: `backend/app/computers/auth.py`)). A computers-only key is refused on the agents API. Every key is verified with `GET /api/v1/computers?externalUserId=__auth_probe__` and cached 60 s. Pin a user with `/mcp/u/{externalUserId}` or header `X-Maritime-User`.
 
-Nine tools ([tools.ts](file:///Users/mariagorskikh/maritime/mcp/src/tools.ts), [schemas.ts](file:///Users/mariagorskikh/maritime/mcp/src/schemas.ts)):
+Nine tools ([tools.ts](Maritime repo: `mcp/src/tools.ts`), [schemas.ts](Maritime repo: `mcp/src/schemas.ts`)):
 
 | Tool | Params | Notes |
 |---|---|---|
@@ -938,13 +938,13 @@ Nine tools ([tools.ts](file:///Users/mariagorskikh/maritime/mcp/src/tools.ts), [
 
 Screen is 1280x800 physical, 1200x750 model frame. Screenshot default `jpeg` quality 80.
 
-REST equivalents under `/api/v1` ([router_v1.py](file:///Users/mariagorskikh/maritime/backend/app/computers/router_v1.py)): `POST /computers {externalUserId, name}`, `GET /computers?externalUserId=`, `GET/DELETE /computers/{id}`, `POST /{id}/wake|sleep`, `POST /{id}/actions` (300/min), `GET /{id}/screenshot?format&quality`, `POST /{id}/exec {command, timeoutS<=30}`, `GET/PUT /{id}/files?path=`, `GET /{id}/files/list`, `POST /{id}/viewer {mode: watch|control, ttlS 30..3600, reason}`, `POST /{id}/sessions/close`, `POST /{id}/takeover/complete {success, note}`.
+REST equivalents under `/api/v1` ([router_v1.py](Maritime repo: `backend/app/computers/router_v1.py`)): `POST /computers {externalUserId, name}`, `GET /computers?externalUserId=`, `GET/DELETE /computers/{id}`, `POST /{id}/wake|sleep`, `POST /{id}/actions` (300/min), `GET /{id}/screenshot?format&quality`, `POST /{id}/exec {command, timeoutS<=30}`, `GET/PUT /{id}/files?path=`, `GET /{id}/files/list`, `POST /{id}/viewer {mode: watch|control, ttlS 30..3600, reason}`, `POST /{id}/sessions/close`, `POST /{id}/takeover/complete {success, note}`.
 
 Errors are `{error, message, retryAfterS}`: 402 plan, 409 `human_in_control`, 429 concurrency, 503 no capacity. Ownership mismatches are 404.
 
-Operational notes from memory: `get_computer` does not wake (about 0.8 s, returns `sleeping`); the first action wakes (about 4.4 s, up to 60 s). An unentitled account still gets a `computer_id`; the first action returns `no_plan` 402. Computers is paid-only since plan 37 (2026-09-11), billed as one seat slot at 4 GiB; awake caps 5/25/60 ([billing.md](file:///Users/mariagorskikh/maritime/docs/features/computers/billing.md)).
+Operational notes from memory: `get_computer` does not wake (about 0.8 s, returns `sleeping`); the first action wakes (about 4.4 s, up to 60 s). An unentitled account still gets a `computer_id`; the first action returns `no_plan` 402. Computers is paid-only since plan 37 (2026-09-11), billed as one seat slot at 4 GiB; awake caps 5/25/60 ([billing.md](Maritime repo: `docs/features/computers/billing.md`)).
 
-Any agent can also get its own screen with `desktop: true`. Inside that VM an stdio MCP (`/usr/local/bin/maritime-computer-mcp`, `DESKTOPD_URL=http://127.0.0.1:5911`) exposes `computer`, `computer_batch`, `request_takeover`, and `run_shell` when `DESKTOPD_ALLOW_SHELL=1`. Screenshots also land at `/data/desktop/screenshots/latest.png` ([mcp_server.py](file:///Users/mariagorskikh/maritime/backend/templates/desktop/desktopd/mcp_server.py)). The dashboard viewer is `WS /api/agents/{id}/desktop`.
+Any agent can also get its own screen with `desktop: true`. Inside that VM an stdio MCP (`/usr/local/bin/maritime-computer-mcp`, `DESKTOPD_URL=http://127.0.0.1:5911`) exposes `computer`, `computer_batch`, `request_takeover`, and `run_shell` when `DESKTOPD_ALLOW_SHELL=1`. Screenshots also land at `/data/desktop/screenshots/latest.png` ([mcp_server.py](Maritime repo: `backend/templates/desktop/desktopd/mcp_server.py`)). The dashboard viewer is `WS /api/agents/{id}/desktop`.
 
 Pi wiring for the hosted MCP:
 
@@ -956,7 +956,7 @@ const transport = new StreamableHttpTransport("https://mcp.maritime.sh/mcp/u/usr
 
 ### 3.8 MARITIME.md guidance
 
-[MARITIME.md](file:///Users/mariagorskikh/maritime/backend/templates/maritime_md/MARITIME.md) is copied to `/data/.openclaw/workspace/MARITIME.md` and tells the agent:
+[MARITIME.md](Maritime repo: `backend/templates/maritime_md/MARITIME.md`) is copied to `/data/.openclaw/workspace/MARITIME.md` and tells the agent:
 
 - It runs in an ephemeral micro-VM; only `/data` survives.
 - Share files with `maritime-share` and paste the fence verbatim.
@@ -967,11 +967,11 @@ const transport = new StreamableHttpTransport("https://mcp.maritime.sh/mcp/u/usr
 - Env identity: `MARITIME_AGENT_ID`, `MARITIME_BACKEND_URL`, `MARITIME_INTERNAL_TOKEN` ("don't leak it"), `INKBOX_AGENT_HANDLE`.
 - "**Default to `browserbase` for anything the user might want to watch or verify**".
 
-[AGENTS_PREPEND.md](file:///Users/mariagorskikh/maritime/backend/templates/maritime_md/AGENTS_PREPEND.md) starts with `<!-- maritime-prepend-v3 -->`, sits below the persona in AGENTS.md, and says of itself: "This block is platform mechanics only. It is NOT your identity." A resident watcher re-asserts both blocks if the file is wiped. Open Instinct should ship an equivalent `INSTINCT.md` with the same split: identity first, mechanics second.
+[AGENTS_PREPEND.md](Maritime repo: `backend/templates/maritime_md/AGENTS_PREPEND.md`) starts with `<!-- maritime-prepend-v3 -->`, sits below the persona in AGENTS.md, and says of itself: "This block is platform mechanics only. It is NOT your identity." A resident watcher re-asserts both blocks if the file is wiped. Open Instinct should ship an equivalent `INSTINCT.md` with the same split: identity first, mechanics second.
 
 ### 3.9 SDKs
 
-**TypeScript** `maritime-sdk` 0.9.0 (zero deps, Node 18+, reads `MARITIME_API_KEY`, `MARITIME_API_URL`) ([index.ts](file:///Users/mariagorskikh/maritime/sdk/src/index.ts)):
+**TypeScript** `maritime-sdk` 0.9.0 (zero deps, Node 18+, reads `MARITIME_API_KEY`, `MARITIME_API_URL`) ([index.ts](Maritime repo: `sdk/src/index.ts`)):
 
 ```ts
 import { Maritime } from "maritime-sdk";
@@ -992,7 +992,7 @@ const shot = await m.computers.act(computer.id, { action: "screenshot" });
 
 Resources: `agents` (create, provision, get, list, chat, start/stop/sleep/restart/delete, listEnv/setEnv/deleteEnv/reloadEnv, logs, identity, exec, `files.*`, `skills.*`), `computers` (create, list, get, delete, wake, sleep, act, screenshot, exec, viewer, closeSession, sessions, usage, `files.*`), `projects`, `keys`, `webhooks`, `billing`, plus `verifyWebhookSignature`, `pushSchedules`, `observeScheduler`, and computer-use dialect converters (`fromOpenAI`, `fromGemini`, `fromQwen`).
 
-**Python** `maritime` (pyproject 0.8.0; `__version__` string says 0.6.0; stdlib only, Python 3.9+) ([resources.py](file:///Users/mariagorskikh/maritime/sdk-python/maritime/resources.py)):
+**Python** `maritime` (pyproject 0.8.0; `__version__` string says 0.6.0; stdlib only, Python 3.9+) ([resources.py](Maritime repo: `sdk-python/maritime/resources.py`)):
 
 ```python
 from maritime import Maritime
@@ -1006,7 +1006,7 @@ The Python SDK has no `computers` resource yet. Prefer TypeScript for Open Insti
 
 ### 3.10 Multi-tenant front door
 
-For a hosted Open Instinct that spawns one agent per person ([FRONT_DOOR.md](file:///Users/mariagorskikh/maritime/docs/FRONT_DOOR.md)):
+For a hosted Open Instinct that spawns one agent per person ([FRONT_DOOR.md](Maritime repo: `docs/FRONT_DOOR.md`)):
 
 ```
 PUT  /api/v1/end-users/{externalId}                {"displayName","metadata","tags"}
@@ -1017,9 +1017,9 @@ POST /api/v1/end-users/{externalId}/tokens         {"agentId","scopes":["chat","
 POST /api/v1/projects/{projectId}/messages         {"externalUserId","message","wait":30,"metadata"}
 ```
 
-Project `newChatPolicy: spawn` gives "a dedicated agent per user, the B2B2C mode". Outbound webhooks: `POST /api/v1/webhooks {url, events}` returns a `whsec_` secret once; deliveries carry `X-Maritime-Event`, `X-Maritime-Delivery`, `X-Maritime-Signature: sha256=<hmac>` ([outbound-webhooks.md](file:///Users/mariagorskikh/maritime/docs/features/outbound-webhooks.md)). Signed inbound for sleeping agents: `PUT /api/agents/{id}/signed-webhook {path, scheme, secret}` yields `https://api.maritime.sh/w/{agent_id}/{path}`.
+Project `newChatPolicy: spawn` gives "a dedicated agent per user, the B2B2C mode". Outbound webhooks: `POST /api/v1/webhooks {url, events}` returns a `whsec_` secret once; deliveries carry `X-Maritime-Event`, `X-Maritime-Delivery`, `X-Maritime-Signature: sha256=<hmac>` ([outbound-webhooks.md](Maritime repo: `docs/features/outbound-webhooks.md`)). Signed inbound for sleeping agents: `PUT /api/agents/{id}/signed-webhook {path, scheme, secret}` yields `https://api.maritime.sh/w/{agent_id}/{path}`.
 
-Pricing noted in [RESELLER_QUICKSTART.md](file:///Users/mariagorskikh/maritime/docs/RESELLER_QUICKSTART.md): Free 3 agents, Starter $20 for 20, Growth $100 for 100, Scale $500 for 500. Nothing metered by time or tokens.
+Pricing noted in [RESELLER_QUICKSTART.md](Maritime repo: `docs/RESELLER_QUICKSTART.md`): Free 3 agents, Starter $20 for 20, Growth $100 for 100, Scale $500 for 500. Nothing metered by time or tokens.
 
 ---
 

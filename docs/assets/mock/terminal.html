@@ -1,0 +1,51 @@
+<!doctype html><html><head><meta charset="utf-8"><title>instinct --help</title>
+<style>
+body{margin:0;background:#F2F2F7;display:flex;justify-content:center;padding:40px;font-family:-apple-system,Helvetica,Arial,sans-serif}
+.win{width:1040px;background:#1E1E1E;border-radius:14px;box-shadow:0 30px 60px rgba(0,0,0,.3);overflow:hidden}
+.bar{height:40px;background:#2D2D2D;display:flex;align-items:center;padding:0 14px;gap:8px}
+.dot{width:12px;height:12px;border-radius:50%}
+.t{flex:1;text-align:center;color:#9A9A9A;font-size:13px;margin-right:60px}
+pre{margin:0;padding:22px 26px 28px;color:#E6E6E6;font:14px/1.5 "SF Mono",Menlo,Consolas,monospace;white-space:pre-wrap}
+.p{color:#7EE787} .c{color:#79C0FF}
+</style></head><body><div class="win"><div class="bar"><span class="dot" style="background:#FF5F57"></span><span class="dot" style="background:#FEBC2E"></span><span class="dot" style="background:#28C840"></span><span class="t">open-instinct — zsh</span></div>
+<pre><span class="p">❯</span> <span class="c">pnpm instinct --help</span>
+instinct  Open Instinct: a personal agent you text on iMessage, with its own computer.
+
+Usage: instinct &lt;command&gt; [options]   (add --help to any command)
+
+Set up
+  init     Write config.json and, with INKBOX_ADMIN_API_KEY, provision the agent&#x27;s iMessage identity.
+           instinct init --name &quot;Maria&quot; --phone +14155550100 --email maria@example.com --handle maria-instinct
+  connect  Print the router number and `connect @handle` text; save the QR to &lt;dataDir&gt;/connect-qr.png.
+           instinct connect
+
+Run
+  dev     Run the agent server in this process. --tunnel opens an Inkbox tunnel so iMessage reaches it.
+          instinct dev --port 8080 --tunnel
+  chat    Send one message to a running agent, locally or through api.maritime.sh.
+          instinct chat &quot;what is on my calendar tomorrow&quot;
+  status  Show what a running server reports on GET /.
+          instinct status
+
+Deploy
+  deploy  Create the Maritime agent (own microVM with a desktop) from a built image. Needs MARITIME_API_KEY.
+          instinct deploy --image ghcr.io/maria/open-instinct-agent:latest
+
+Payments
+  payments  Link the owner&#x27;s Stripe Link wallet to the agent (prints the authorize URL) and show what is connected.
+            instinct payments connect
+
+People and trust
+  invite  Add a person to the trusted network and create an Inkbox A2A invitation for their agent.
+          instinct invite &quot;Sam Lee&quot; --tier partner --email sam@example.com --handle sam-instinct
+  trust   Change tiers and scoped grants. Tiers: partner, family, friend, contact, stranger.
+          instinct trust grant sam-lee calendar.write,plans.commit --until 2026-10-12 --max-usd 150 --note &quot;dinner this week&quot;
+
+Proactive
+  schedules  Cron or one-shot prompts the agent runs for you, delivered over iMessage.
+             instinct schedules add &quot;0 8 * * 1-5&quot; &quot;Morning briefing: calendar, weather, top emails&quot; --tz America/New_York
+
+Global: --data-dir &lt;dir&gt; (default $INSTINCT_DATA_DIR or ./.instinct), --help, --version
+
+Env: INSTINCT_DATA_DIR, INKBOX_ADMIN_API_KEY, MARITIME_API_KEY, ANTHROPIC_API_KEY, COMPOSIO_API_KEY, COMPOSIO_TOOLKITS, LINK_CLIENT_ID
+</pre></div></body></html>

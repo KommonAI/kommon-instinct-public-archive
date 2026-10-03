@@ -34,7 +34,7 @@ Two kinds of API key matter:
 ```ts
 import { InkboxProvisioner } from "@open-instinct/inkbox";
 
-const admin = new InkboxProvisioner({ adminApiKey: process.env.INKBOX_ADMIN_KEY! });
+const admin = new InkboxProvisioner({ adminApiKey: process.env.INKBOX_ADMIN_API_KEY! });
 const id = await admin.provisionIdentity({ handle: "maria-instinct", displayName: "Maria's Instinct", imessage: true });
 const agentKey = await admin.mintIdentityKey(id.identityId, "maria agent");      // shown once
 const signingKey = await admin.createSigningKey(id.handle);                      // shown once
