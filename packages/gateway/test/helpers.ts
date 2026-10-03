@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { InkboxProvisioner } from "@libre-instinct/inkbox";
+import type { InkboxProvisioner } from "@open-instinct/inkbox";
 import type { UserRecord } from "../src/store.js";
 
 export function tempDir(prefix = "gateway-test-"): string {

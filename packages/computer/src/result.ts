@@ -7,7 +7,7 @@
  * and for the audit log).
  */
 import { toLlmContent, type CallToolResult } from "@earendil-works/pi-mcp";
-import type { ToolResultLike } from "@libre-instinct/core";
+import type { ToolResultLike } from "@open-instinct/core";
 
 export type ContentBlock = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 

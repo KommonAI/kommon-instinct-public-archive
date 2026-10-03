@@ -1,9 +1,9 @@
-import { InkboxProvisioner } from "@libre-instinct/inkbox";
+import { InkboxProvisioner } from "@open-instinct/inkbox";
 import { consoleLogger } from "./logger.js";
 import { createGateway } from "./server.js";
 import { UserStore } from "./store.js";
 
-export const DEFAULT_AGENT_IMAGE = "ghcr.io/mariagorskikh/libre-instinct-agent:latest";
+export const DEFAULT_AGENT_IMAGE = "ghcr.io/mariagorskikh/open-instinct-agent:latest";
 
 export interface GatewayEnv {
   port: number;

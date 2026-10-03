@@ -1,4 +1,4 @@
-import type { Principal, Tier } from "@libre-instinct/core";
+import type { Principal, Tier } from "@open-instinct/core";
 
 /** What the agent may disclose about its owner to a counterpart at each tier. Mirrors docs/PERMISSIONS.md. */
 const SHARE_AT_TIER: Record<Tier, string> = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Principal, RegisteredTool, ToolContext } from "@libre-instinct/core";
+import type { Principal, RegisteredTool, ToolContext } from "@open-instinct/core";
 import { DesktopdBackend, DesktopdClient, desktopdTools, takeoverInstructions } from "../src/index.js";
 import { PNG_B64, bytesResponse, fakeFetch, jsonResponse, unreachableFetch } from "./fake-fetch.js";
 

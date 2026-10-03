@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { InkboxProvisioner } from "@libre-instinct/inkbox";
+import type { InkboxProvisioner } from "@open-instinct/inkbox";
 import { type Logger, silentLogger } from "./logger.js";
 import { type UserRecord, type UserStore } from "./store.js";
 
@@ -207,7 +207,7 @@ export async function provisionUser(input: ProvisionInput, deps: ProvisionDeps):
       const identity = await deps.inkbox.provisionIdentity({
         handle: user.handle,
         displayName: `${user.name}'s Instinct`,
-        description: `LibreInstinct for ${user.name}`,
+        description: `Open Instinct for ${user.name}`,
         imessage: true,
         phone: false,
       });
@@ -215,7 +215,7 @@ export async function provisionUser(input: ProvisionInput, deps: ProvisionDeps):
       log.info("provision.identity", { userId: user.id, handle: user.handle });
     }
     if (!user.identityApiKey) {
-      const key = await deps.inkbox.mintIdentityKey(user.identityId, `libre-instinct ${user.id}`);
+      const key = await deps.inkbox.mintIdentityKey(user.identityId, `open-instinct ${user.id}`);
       user = store.save({ ...user, identityApiKey: key });
       log.info("provision.identity_key", { userId: user.id });
     }

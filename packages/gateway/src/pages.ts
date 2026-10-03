@@ -1,6 +1,6 @@
 import type { UserRecord } from "./store.js";
 
-export const GITHUB_URL = "https://github.com/mariagorskikh/libre-instinct";
+export const GITHUB_URL = "https://github.com/mariagorskikh/open-instinct";
 
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
@@ -73,11 +73,11 @@ ${refresh}
 <body>
 <div class="wrap">
 <header>
-  <a class="brand" href="/"><span></span>LibreInstinct</a>
+  <a class="brand" href="/"><span></span>Open Instinct</a>
   <nav><a href="${GITHUB_URL}" rel="noopener">GitHub</a></nav>
 </header>
 ${body}
-<footer>LibreInstinct is open source (MIT). Your agent runs in its own VM; this page only sets it up. <a href="${GITHUB_URL}" rel="noopener">Read the code</a>.</footer>
+<footer>Open Instinct is open source (MIT). Your agent runs in its own VM; this page only sets it up. <a href="${GITHUB_URL}" rel="noopener">Read the code</a>.</footer>
 </div>
 </body>
 </html>`;
@@ -122,7 +122,7 @@ export function renderLanding(opts: LandingOptions): string {
     : `<div class="card"><h2 style="margin-top:0">Signups are closed here</h2><p class="hint">This gateway only relays messages. To run your own, follow the README on GitHub.</p></div>`;
 
   return layout(
-    "LibreInstinct",
+    "Open Instinct",
     `<h1>A personal agent you text.</h1>
 <p class="lead">It has its own computer, does real tasks, and coordinates with the Instincts of the people you trust. Open source, yours to run.</p>
 <div class="grid three" style="margin-bottom:24px">

@@ -14,7 +14,7 @@ import {
   type McpTransport,
   type Tool,
 } from "@earendil-works/pi-mcp";
-import type { RegisteredTool, ToolMeta, ToolResultLike } from "@libre-instinct/core";
+import type { RegisteredTool, ToolMeta, ToolResultLike } from "@open-instinct/core";
 import { errorResult, findStringField, isRecord, mcpResultToToolResult } from "./result.js";
 import { mcpSchemaToTypeBox, sanitizeToolName, schemaHasProperty } from "./schema.js";
 import { defineTool } from "./tool.js";
@@ -102,7 +102,7 @@ export class MaritimeMcpBackend implements ComputerBackend {
 
   private async openClient(): Promise<McpClient> {
     const client = new McpClient({
-      name: "libre-instinct",
+      name: "open-instinct",
       version: "0.1.0",
       requestTimeoutMs: this.requestTimeoutMs,
     });

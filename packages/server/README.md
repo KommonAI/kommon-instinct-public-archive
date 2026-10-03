@@ -1,4 +1,4 @@
-# @libre-instinct/server
+# @open-instinct/server
 
 The agent process. One container, one person. It wires the core runtime to the
 optional pieces (Inkbox, computer, apps, trusted network), serves Maritime's BYO
@@ -69,7 +69,7 @@ a `ConsoleOutbox`, which is how local development and the smoke test work.
 ## Programmatic use
 
 ```ts
-import { boot, createHttpServer } from "@libre-instinct/server";
+import { boot, createHttpServer } from "@open-instinct/server";
 
 const app = await boot(process.env);          // { runtime, state, config, scheduler, outbox, close, ... }
 const server = createHttpServer(app);
@@ -100,7 +100,7 @@ stored in `<data>/secrets/webhook.json` (mode 0600).
 
 ## Smoke test
 
-`pnpm --filter @libre-instinct/server build && pnpm smoke` boots a real agent in a
+`pnpm --filter @open-instinct/server build && pnpm smoke` boots a real agent in a
 temp directory with Pi's faux provider (no network, no keys) and checks:
 
 1. Owner chat: "remember that I like window seats" makes the model call `memory_write`;
@@ -114,12 +114,12 @@ It exits non-zero on any failed check.
 
 ## Tests
 
-`pnpm --filter @libre-instinct/server test` runs vitest against a stubbed runtime: every
+`pnpm --filter @open-instinct/server test` runs vitest against a stubbed runtime: every
 route (health, status, schedules, owner chat, envelope chat, body limit, 400/404/500,
 webhook 503/401/204), the Maritime schedule sync, the console outbox, the file tool
 wrapping, the webhook subscription setup and the skills loader.
 
 ## Docker
 
-`deploy/Dockerfile.agent` builds this package into `ghcr.io/<owner>/libre-instinct-agent`.
+`deploy/Dockerfile.agent` builds this package into `ghcr.io/<owner>/open-instinct-agent`.
 `deploy/docker-compose.yml` runs it next to the gateway for a local trial.

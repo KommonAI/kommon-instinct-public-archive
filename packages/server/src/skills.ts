@@ -41,7 +41,7 @@ function isDir(p: string): boolean {
 export function loadSkillsPrompt(dir: string | undefined, logger?: (m: string) => void): string | undefined {
   if (!dir || !isDir(dir)) return undefined;
   try {
-    const { skills, diagnostics } = loadSkillsFromDir({ dir, source: "libre-instinct" });
+    const { skills, diagnostics } = loadSkillsFromDir({ dir, source: "open-instinct" });
     for (const d of diagnostics) logger?.(`skill warning: ${JSON.stringify(d)}`);
     if (skills.length === 0) return undefined;
     logger?.(`loaded ${skills.length} skills from ${dir}`);

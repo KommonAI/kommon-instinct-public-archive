@@ -1,5 +1,5 @@
 import type { TSchema } from "typebox";
-import type { RegisteredTool, ToolResultLike, ToolSpec } from "@libre-instinct/core";
+import type { RegisteredTool, ToolResultLike, ToolSpec } from "@open-instinct/core";
 
 /**
  * Same shapes as core's defineTool and textResult. Kept local so this package depends on core

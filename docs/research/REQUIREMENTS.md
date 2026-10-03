@@ -1,8 +1,8 @@
-# LibreInstinct: requirements specification
+# Open Instinct: requirements specification
 
 Status: draft 1, 2026-10-03. Derived from the research notes in this folder.
 
-This document says what LibreInstinct must do. It does not say how. The how lives in
+This document says what Open Instinct must do. It does not say how. The how lives in
 [ARCHITECTURE.md](../ARCHITECTURE.md), [PERMISSIONS.md](../PERMISSIONS.md) and
 [PROTOCOL.md](../PROTOCOL.md).
 
@@ -33,14 +33,14 @@ Instinct, the source is linked inline.
 
 ## 1. Scope
 
-LibreInstinct is an open-source personal agent. You text it. It has its own computer,
+Open Instinct is an open-source personal agent. You text it. It has its own computer,
 phone number and email address. It does chores for you: research, bookings, purchases,
 follow-ups, files. It can talk to the agents of people you trust and coordinate plans
 with them.
 
 The reference product is Instinct by Spear Street Technology, Inc. Instinct is closed,
 invite-only, and runs only on the company's servers
-([Vellum](https://www.vellum.ai/blog/official-instinct-breakdown)). LibreInstinct copies
+([Vellum](https://www.vellum.ai/blog/official-instinct-breakdown)). Open Instinct copies
 the behaviors users love and fixes the problems users reported.
 
 The target host is Maritime (one microVM per user, with a desktop). Channels come from
@@ -116,7 +116,7 @@ Shinn's early rule: "let's not focus on capability. Let's only focus on understa
 know what the agent did, is doing, and will do next. Instinct users complained that there
 is no visibility into what the agent is thinking or doing
 ([daily.dev](https://daily.dev/posts/instinct-s-onboarding-wows-but-nobody-wants-to-do-real-work-in-it-6rijpuy6a)).
-LibreInstinct treats that as a requirement, not a nice-to-have.
+Open Instinct treats that as a requirement, not a nice-to-have.
 
 Consequences:
 
@@ -131,7 +131,7 @@ Consequences:
 
 Format: "As the owner, I can ..., so that ...". Each story has acceptance criteria.
 Stories with a star (*) are confirmed Instinct behaviors with a source. Unstarred stories
-are LibreInstinct additions.
+are Open Instinct additions.
 
 ### 3.1 Messaging
 
@@ -468,7 +468,7 @@ plain text after disconnect
 As the owner, nothing I say is used to train anyone's model. Instinct trains by default
 with a forward-only opt-out ([Instinct privacy policy](https://instinct.com/privacy-policy)).
 
-- LibreInstinct has no training pipeline. Model providers are called with the owner's own
+- Open Instinct has no training pipeline. Model providers are called with the owner's own
   key and the provider's no-training terms where available.
 
 ### 3.6 Payments
@@ -517,7 +517,7 @@ Instinct's Vault holds logins and TOTP seeds
 ## 4. Permission tier model
 
 Instinct offers per-relationship, per-domain permissions but publishes no schema
-([36kr](https://eu.36kr.com/en/p/4003952149663618)). LibreInstinct makes the schema
+([36kr](https://eu.36kr.com/en/p/4003952149663618)). Open Instinct makes the schema
 explicit. Six tiers, default deny, additive grants.
 
 The canonical table lives in [PERMISSIONS.md](../PERMISSIONS.md). This section states the
@@ -596,7 +596,7 @@ append-only audit log with principal, tier, capability, scope, and result.
 sentence and read the result back as a sentence. No JSON is shown unless asked.
 
 **T-8 (MUST) Read-only mode exists.** Instinct has no read-only connector option
-([assistantbenchmark](https://assistantbenchmark.com/agents/instinct)). LibreInstinct
+([assistantbenchmark](https://assistantbenchmark.com/agents/instinct)). Open Instinct
 splits read and write for calendar, email, contacts and files, and lets the owner connect
 read-only.
 
@@ -613,7 +613,7 @@ approval cannot be reused for a second action.
 ## 5. Agent-to-agent protocol requirements
 
 Instinct's "Instinct-to-Instinct communication protocol" is undocumented
-([Shinn](https://x.com/noahrshinn/status/2097794967574028448)). LibreInstinct publishes
+([Shinn](https://x.com/noahrshinn/status/2097794967574028448)). Open Instinct publishes
 its protocol (OIP/1, in [PROTOCOL.md](../PROTOCOL.md)) and builds it on A2A so any agent
 can join. These are the requirements that protocol must meet.
 
@@ -689,8 +689,8 @@ asked for this month?").
 **A2A-19 (MUST)** Humans without an agent get the same intents as friendly text messages,
 and their replies are parsed back into the protocol ([PROTOCOL.md](../PROTOCOL.md)).
 
-**A2A-20 (SHOULD)** Any A2A-compliant agent that is not an LibreInstinct can still read
-the text part and reply in text; the receiving LibreInstinct parses it.
+**A2A-20 (SHOULD)** Any A2A-compliant agent that is not an Open Instinct can still read
+the text part and reply in text; the receiving Open Instinct parses it.
 
 **A2A-21 (MUST)** The protocol spec and a conformance test suite ship in the repository.
 
@@ -771,7 +771,7 @@ scheduled run, and connector health. Instinct had outages with no status page
 
 **NF-C-1 (MUST) Owner pays the model directly.** Bring-your-own API key. No markup, no
 take rate, no ads. Shinn also rejects ads but monetizes through a merchant take rate
-([ILTB](https://www.youtube.com/watch?v=Am7IWP8IpEc)); LibreInstinct has no revenue path
+([ILTB](https://www.youtube.com/watch?v=Am7IWP8IpEc)); Open Instinct has no revenue path
 and needs none.
 
 **NF-C-2 (MUST) Idle costs nothing.** The VM sleeps when there is no work. Scheduled wakes
@@ -824,9 +824,9 @@ confirms.
 ## 7. Better than Instinct
 
 Instinct is excellent at being useful and weak at being inspectable. These are the
-places where LibreInstinct is deliberately better. Each item maps to requirements above.
+places where Open Instinct is deliberately better. Each item maps to requirements above.
 
-| # | LibreInstinct | Instinct today | Requirements |
+| # | Open Instinct | Instinct today | Requirements |
 |---|---|---|---|
 | B-1 | **Open source.** Every line is readable, including the permission guard and the protocol. | Closed; protocol undocumented ([Vellum](https://www.vellum.ai/blog/official-instinct-breakdown)) | A2A-21, T-5 |
 | B-2 | **Self-hostable.** One command deploys to Maritime or any Linux host. Your data never leaves your VM. | Runs only on Spear Street servers | NF-P-1, NF-S-4 |
@@ -843,7 +843,7 @@ places where LibreInstinct is deliberately better. Each item maps to requirement
 | B-13 | **No invite scarcity.** Anyone can run one. | Invite-only; invites resold for about $300 ([podcastalpha](https://podcastalpha.substack.com/p/noah-shinn-on-instincts-10-a-day)) | B-2 |
 | B-14 | **Audit you can read.** Hash-chained JSONL, readable in chat, exportable. | No audit trail exposed to users | NF-A-1 to NF-A-3 |
 
-What LibreInstinct does not try to beat in v1: Instinct's scale, its merchant
+What Open Instinct does not try to beat in v1: Instinct's scale, its merchant
 partnerships (Shopify, Stripe Link, 1Password), and its phone-call Concierge. These are
 adapters for later.
 
@@ -853,7 +853,7 @@ adapters for later.
 
 - A native iOS or Mac app. Instinct is testing one
   ([runtimewire](https://runtimewire.com/article/instinct-mac-app-imessage-local-browser-whoop));
-  LibreInstinct stays text-first until a channel adapter needs it.
+  Open Instinct stays text-first until a channel adapter needs it.
 - Voice calls in or out (US-M-8). Adapter slot reserved.
 - Group chats with several humans and one agent in the same thread.
 - Payment rails beyond one-time cards and desktop handover.

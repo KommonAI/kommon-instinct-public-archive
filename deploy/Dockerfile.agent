@@ -1,4 +1,4 @@
-# LibreInstinct agent image. One container = one person's agent.
+# Open Instinct agent image. One container = one person's agent.
 # Satisfies the Maritime BYO contract: 0.0.0.0:$PORT, GET /health, POST /chat, /data, python3 on PATH.
 FROM node:22-slim AS base
 ENV PNPM_HOME=/pnpm

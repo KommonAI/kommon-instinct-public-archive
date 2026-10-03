@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ContactStore, StateDir, defaultConfig, type InstinctConfig, type OutboundMessage, type Principal, type ToolContext } from "@libre-instinct/core";
+import { ContactStore, StateDir, defaultConfig, type InstinctConfig, type OutboundMessage, type Principal, type ToolContext } from "@open-instinct/core";
 import type { InkboxChannel } from "../src/channel.js";
 import { messagingTools, resolveTarget } from "../src/tools.js";
 

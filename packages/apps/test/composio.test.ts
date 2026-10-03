@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StateDir } from "@libre-instinct/core";
+import type { StateDir } from "@open-instinct/core";
 import { APPS_STATE_FILE, ComposioApps, normalizeToolkits, type ComposioClientLike, type ComposioSessionLike, type SessionCreateConfig } from "../src/composio.js";
 import type { McpToolSource } from "../src/wrap.js";
 

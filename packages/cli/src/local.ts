@@ -1,4 +1,4 @@
-/** HTTP calls to a running LibreInstinct server (local or tunneled). */
+/** HTTP calls to a running Open Instinct server (local or tunneled). */
 import { CliError } from "./io.js";
 
 export const DEFAULT_LOCAL_URL = "http://127.0.0.1:8080";

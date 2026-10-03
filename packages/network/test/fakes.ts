@@ -13,7 +13,7 @@ import type {
   RegisteredTool,
   Tier,
   ToolContext,
-} from "@libre-instinct/core";
+} from "@open-instinct/core";
 import type { A2aLike, ProvisionerLike } from "../src/tools.js";
 import { phoneKey, slugify } from "../src/lookup.js";
 

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { StateDir } from "@libre-instinct/core";
+import { StateDir } from "@open-instinct/core";
 import { ensureWebhookSubscription, readWebhookSecrets, writeWebhookSecrets } from "../src/webhook-setup.js";
 
 interface Fakes {

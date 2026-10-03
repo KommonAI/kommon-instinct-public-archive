@@ -73,7 +73,7 @@ skipped with a warning diagnostic.
 
 ## How the server loads skills
 
-In `@libre-instinct/server`, at agent start:
+In `@open-instinct/server`, at agent start:
 
 ```ts
 import { loadSkillsFromDir, formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";

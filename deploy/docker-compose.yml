@@ -15,7 +15,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.agent
-    image: libre-instinct-agent:local
+    image: open-instinct-agent:local
     env_file:
       - .env
     environment:
@@ -32,7 +32,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.gateway
-    image: libre-instinct-gateway:local
+    image: open-instinct-gateway:local
     env_file:
       - .env
     profiles: ["gateway"]

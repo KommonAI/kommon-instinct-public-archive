@@ -7,8 +7,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Inkbox } from "@inkbox/sdk";
-import type { StateDir } from "@libre-instinct/core";
-import { InkboxProvisioner } from "@libre-instinct/inkbox";
+import type { StateDir } from "@open-instinct/core";
+import { InkboxProvisioner } from "@open-instinct/inkbox";
 
 export interface WebhookSecrets {
   subscriptionId?: string;

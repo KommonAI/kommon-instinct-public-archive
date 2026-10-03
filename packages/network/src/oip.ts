@@ -1,5 +1,5 @@
 /**
- * OIP/1: the typed data part two LibreInstincts exchange over A2A.
+ * OIP/1: the typed data part two Open Instincts exchange over A2A.
  * The plain text part is for any agent; this part is for ours. See docs/PROTOCOL.md.
  */
 

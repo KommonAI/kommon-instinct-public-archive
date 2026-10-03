@@ -8,7 +8,7 @@ importers:
 
   .:
     devDependencies:
-      '@libre-instinct/cli':
+      '@open-instinct/cli':
         specifier: workspace:*
         version: link:packages/cli
       '@types/node':
@@ -29,7 +29,7 @@ importers:
       '@earendil-works/pi-mcp':
         specifier: ^1.0.1
         version: 1.0.1
-      '@libre-instinct/core':
+      '@open-instinct/core':
         specifier: workspace:*
         version: link:../core
       typebox:
@@ -51,13 +51,13 @@ importers:
       '@inkbox/sdk':
         specifier: ^0.7.13
         version: 0.7.13
-      '@libre-instinct/core':
+      '@open-instinct/core':
         specifier: workspace:*
         version: link:../core
-      '@libre-instinct/inkbox':
+      '@open-instinct/inkbox':
         specifier: workspace:*
         version: link:../inkbox
-      '@libre-instinct/server':
+      '@open-instinct/server':
         specifier: workspace:*
         version: link:../server
       maritime-sdk:
@@ -82,7 +82,7 @@ importers:
       '@earendil-works/pi-mcp':
         specifier: ^1.0.1
         version: 1.0.1
-      '@libre-instinct/core':
+      '@open-instinct/core':
         specifier: workspace:*
         version: link:../core
       typebox:
@@ -132,10 +132,10 @@ importers:
       '@inkbox/sdk':
         specifier: ^0.7.13
         version: 0.7.13
-      '@libre-instinct/core':
+      '@open-instinct/core':
         specifier: workspace:*
         version: link:../core
-      '@libre-instinct/inkbox':
+      '@open-instinct/inkbox':
         specifier: workspace:*
         version: link:../inkbox
       maritime-sdk:
@@ -157,7 +157,7 @@ importers:
       '@inkbox/sdk':
         specifier: ^0.7.13
         version: 0.7.13
-      '@libre-instinct/core':
+      '@open-instinct/core':
         specifier: workspace:*
         version: link:../core
       typebox:
@@ -176,10 +176,10 @@ importers:
 
   packages/network:
     dependencies:
-      '@libre-instinct/core':
+      '@open-instinct/core':
         specifier: workspace:*
         version: link:../core
-      '@libre-instinct/inkbox':
+      '@open-instinct/inkbox':
         specifier: workspace:*
         version: link:../inkbox
       typebox:
@@ -210,19 +210,19 @@ importers:
       '@inkbox/sdk':
         specifier: ^0.7.13
         version: 0.7.13
-      '@libre-instinct/apps':
+      '@open-instinct/apps':
         specifier: workspace:*
         version: link:../apps
-      '@libre-instinct/computer':
+      '@open-instinct/computer':
         specifier: workspace:*
         version: link:../computer
-      '@libre-instinct/core':
+      '@open-instinct/core':
         specifier: workspace:*
         version: link:../core
-      '@libre-instinct/inkbox':
+      '@open-instinct/inkbox':
         specifier: workspace:*
         version: link:../inkbox
-      '@libre-instinct/network':
+      '@open-instinct/network':
         specifier: workspace:*
         version: link:../network
     devDependencies:

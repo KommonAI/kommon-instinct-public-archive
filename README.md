@@ -1,22 +1,22 @@
-# LibreInstinct
+# Open Instinct
 
 An open-source personal agent you text. It lives on its own computer, does real tasks for you, and coordinates with the agents of the people you trust. It is a from-scratch, documented clone of [Instinct](docs/research/INSTINCT.md), the invite-only personal agent that raised $1B in October 2026, built so anyone can run one.
 
-You text it on iMessage. It books the table, moves the meeting, checks you into the flight, researches the thing, and texts you back. Your partner's LibreInstinct can see your calendar. A friend's can only ask when you are free. A stranger's can leave a message. You decide who gets which key.
+You text it on iMessage. It books the table, moves the meeting, checks you into the flight, researches the thing, and texts you back. Your partner's Open Instinct can see your calendar. A friend's can only ask when you are free. A stranger's can leave a message. You decide who gets which key.
 
 ```
 you  ──iMessage──▶  Inkbox  ──webhook──▶  gateway  ──wake──▶  your agent (Maritime microVM, own Linux desktop)
                                                                    │  Pi agent loop · trust tiers · memory · schedules
                                                                    ├─ computer: Chromium, LibreOffice, files
                                                                    ├─ apps: Gmail, Calendar, … via Composio
-                                                                   └─ network: other LibreInstincts over A2A
+                                                                   └─ network: other Open Instincts over A2A
 ```
 
 ## What it does
 
 | You text | It does |
 |---|---|
-| "Dinner with Sam this week, somewhere near the Mission" | Checks your calendar, asks Sam's LibreInstinct for free evenings, proposes 3 slots, books once you say yes, puts it on both calendars |
+| "Dinner with Sam this week, somewhere near the Mission" | Checks your calendar, asks Sam's Open Instinct for free evenings, proposes 3 slots, books once you say yes, puts it on both calendars |
 | "Check me in for tomorrow's flight" | Opens the airline site on its desktop, asks you to take over for the login once, saves the boarding pass to your files, texts you the gate when it changes |
 | "What's in my inbox that needs me today?" | Reads Gmail through Composio, sends a 5-line brief, drafts the two replies, sends nothing until you approve |
 | "Cancel my gym membership" | Finds the account, walks the cancellation flow on its desktop, hands you the screen for the payment step |
@@ -25,7 +25,7 @@ you  ──iMessage──▶  Inkbox  ──webhook──▶  gateway  ──wak
 
 ## Why this exists
 
-Instinct showed that a personal agent should be a phone number, not an app, and that agents coordinating with other people's agents is the interesting part. It is closed, invite-only and holds your data. LibreInstinct keeps the product shape and opens the box: the model is yours to pick, the permission table is a JSON file with tests, the memory is Markdown you can read, and every side effect is in an audit log you can ask about in chat.
+Instinct showed that a personal agent should be a phone number, not an app, and that agents coordinating with other people's agents is the interesting part. It is closed, invite-only and holds your data. Open Instinct keeps the product shape and opens the box: the model is yours to pick, the permission table is a JSON file with tests, the memory is Markdown you can read, and every side effect is in an audit log you can ask about in chat.
 
 ## Building blocks
 
@@ -42,7 +42,7 @@ Three ways to run it. All need Node 22.19+.
 ### 1. Try it locally in five minutes (no phone number yet)
 
 ```bash
-git clone https://github.com/mariagorskikh/libre-instinct && cd libre-instinct
+git clone https://github.com/mariagorskikh/open-instinct && cd open-instinct
 pnpm install && pnpm -r build
 export ANTHROPIC_API_KEY=sk-ant-...
 npx instinct init --name "Maria" --phone +15555550100 --email you@example.com --handle maria-instinct
@@ -66,7 +66,7 @@ Text the connect command from your iPhone. Your agent answers on iMessage.
 
 ```bash
 export MARITIME_API_KEY=mk_...                 # https://maritime.sh → Settings → API keys
-npx instinct deploy --image ghcr.io/mariagorskikh/libre-instinct-agent:latest
+npx instinct deploy --image ghcr.io/mariagorskikh/open-instinct-agent:latest
 ```
 
 For many users, run the [gateway](packages/gateway/README.md): a signup page that provisions an Inkbox identity and a Maritime agent per person and relays their messages. See [docs/DEPLOY-MARITIME.md](docs/DEPLOY-MARITIME.md).

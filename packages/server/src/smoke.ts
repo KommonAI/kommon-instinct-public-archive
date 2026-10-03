@@ -9,8 +9,8 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { AuditLog, encodeEvent } from "@libre-instinct/core";
-import type { OutboundMessage, Outbox, Principal } from "@libre-instinct/core";
+import { AuditLog, encodeEvent } from "@open-instinct/core";
+import type { OutboundMessage, Outbox, Principal } from "@open-instinct/core";
 import { boot } from "./boot.js";
 import { createHttpServer } from "./http.js";
 

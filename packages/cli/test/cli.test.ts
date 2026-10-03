@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { ContactStore, Scheduler, StateDir, loadPolicy, type InstinctConfig } from "@libre-instinct/core";
+import { ContactStore, Scheduler, StateDir, loadPolicy, type InstinctConfig } from "@open-instinct/core";
 import { COMMAND_NAMES } from "../src/cli.js";
 import { fakeFetch, json, readJson, run, tmpDir } from "./helpers.js";
 
@@ -236,7 +236,7 @@ describe("deploy", () => {
 
   it("--dry-run prints the create body with secrets redacted", async () => {
     const dir = await seeded();
-    const r = await run(["deploy", "--image", "ghcr.io/maria/libre-instinct-agent:v1", "--dry-run"], { INSTINCT_DATA_DIR: dir, ANTHROPIC_API_KEY: "sk-ant-x" });
+    const r = await run(["deploy", "--image", "ghcr.io/maria/open-instinct-agent:v1", "--dry-run"], { INSTINCT_DATA_DIR: dir, ANTHROPIC_API_KEY: "sk-ant-x" });
     expect(r.code, r.err).toBe(0);
     const body = JSON.parse(r.out);
     expect(body.name).toBe("instinct-maria-instinct");
@@ -244,7 +244,7 @@ describe("deploy", () => {
     expect(body.desktop).toBe(true);
     expect(body.exposedPort).toBe(8080);
     expect(body.healthCheckPath).toBe("/health");
-    expect(body.externalId).toBe("libre-instinct:maria-instinct");
+    expect(body.externalId).toBe("open-instinct:maria-instinct");
     expect(body.idleTtlSeconds).toBe(900);
     const vars = Object.fromEntries(body.initialEnvVars.map((v: { key: string; value: string; isSecret: boolean }) => [v.key, v]));
     expect(vars.INKBOX_API_KEY).toEqual({ key: "INKBOX_API_KEY", value: "<redacted>", isSecret: true });
@@ -258,7 +258,7 @@ describe("deploy", () => {
     const dir = await seeded();
     const { fetch, calls } = fakeFetch({ "https://api.maritime.sh/api/agents": () => json({ id: "agt_42", name: "instinct-maria-instinct", status: "deploying" }) });
     const r = await run(
-      ["deploy", "--image", "ghcr.io/maria/libre-instinct-agent:v1", "--idle", "600", "--name", "my-instinct"],
+      ["deploy", "--image", "ghcr.io/maria/open-instinct-agent:v1", "--idle", "600", "--name", "my-instinct"],
       { INSTINCT_DATA_DIR: dir, MARITIME_API_KEY: "mk_live", ANTHROPIC_API_KEY: "sk-ant-x" },
       { fetchImpl: fetch },
     );

@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { InkboxProvisioner } from "@libre-instinct/inkbox";
+import type { InkboxProvisioner } from "@open-instinct/inkbox";
 import { type Logger, consoleLogger } from "./logger.js";
 import { GITHUB_URL, type RouterInfo, renderConnect, renderLanding, renderMessage } from "./pages.js";
 import { type MaritimeProvisionOptions, newUserId, provisionUser } from "./provision.js";

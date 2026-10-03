@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { ContactStore, StateDir, type InstinctConfig } from "@libre-instinct/core";
+import { ContactStore, StateDir, type InstinctConfig } from "@open-instinct/core";
 import type { ProvisionerLike } from "../src/inkbox-client.js";
 import { readSecrets } from "../src/secrets.js";
 import { readJson, run, tmpDir } from "./helpers.js";

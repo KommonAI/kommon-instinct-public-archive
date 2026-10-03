@@ -3,7 +3,7 @@
  * Commands receive this instead of touching process.* directly.
  */
 import path from "node:path";
-import { StateDir } from "@libre-instinct/core";
+import { StateDir } from "@open-instinct/core";
 import { palette, type Palette } from "./ansi.js";
 import type { CliIo } from "./io.js";
 

@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ToolContext } from "@libre-instinct/core";
+import type { ToolContext } from "@open-instinct/core";
 import { FILE_TOOL_CAPABILITIES, fileTools } from "../src/file-tools.js";
 
 const ctx: ToolContext = {

@@ -1,4 +1,4 @@
-import type { Capability } from "@libre-instinct/core";
+import type { Capability } from "@open-instinct/core";
 
 /**
  * Map a Composio tool slug (for example `GMAIL_SEND_EMAIL`) to the capabilities

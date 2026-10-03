@@ -1,6 +1,6 @@
-# @libre-instinct/inkbox
+# @open-instinct/inkbox
 
-The Inkbox adapter. Inkbox is the phone company for LibreInstinct: it gives the
+The Inkbox adapter. Inkbox is the phone company for Open Instinct: it gives the
 agent a handle, a mailbox, an iMessage line, an optional SMS number, and an
 agent-to-agent (A2A) endpoint. This package turns those into four small pieces
 the rest of the system uses:
@@ -32,7 +32,7 @@ Two kinds of API key matter:
 - an **identity-scoped key** sees one identity only. The agent process runs with this key.
 
 ```ts
-import { InkboxProvisioner } from "@libre-instinct/inkbox";
+import { InkboxProvisioner } from "@open-instinct/inkbox";
 
 const admin = new InkboxProvisioner({ adminApiKey: process.env.INKBOX_ADMIN_KEY! });
 const id = await admin.provisionIdentity({ handle: "maria-instinct", displayName: "Maria's Instinct", imessage: true });
@@ -74,7 +74,7 @@ a2a.task.created, a2a.task.message, a2a.task.canceled, a2a.sent_task.updated
 Every delivery is signed. Verify before parsing:
 
 ```ts
-import { parseInkboxEvent, verifyInkboxSignature } from "@libre-instinct/inkbox";
+import { parseInkboxEvent, verifyInkboxSignature } from "@open-instinct/inkbox";
 
 // raw body as Buffer or string; headers as received
 if (!verifyInkboxSignature(rawBody, req.headers, signingKey)) return res.status(403).end();
@@ -152,7 +152,7 @@ The text part is for any A2A agent. The data part carries the typed OIP/1 intent
 ## Testing
 
 ```
-pnpm --filter @libre-instinct/inkbox test
+pnpm --filter @open-instinct/inkbox test
 ```
 
 Tests use a recording fake `fetch`. The provisioner and A2A client take it as `fetchImpl`.

@@ -1,7 +1,7 @@
 {
-  "name": "@libre-instinct/server",
+  "name": "@open-instinct/server",
   "version": "0.1.0",
-  "description": "The LibreInstinct agent process: /health, /chat, /schedules, webhook intake, local dev runner (Maritime BYO contract)",
+  "description": "The Open Instinct agent process: /health, /chat, /schedules, webhook intake, local dev runner (Maritime BYO contract)",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -32,11 +32,11 @@
     "@earendil-works/pi-ai": "^1.0.1",
     "@earendil-works/pi-coding-agent": "^1.0.1",
     "@inkbox/sdk": "^0.7.13",
-    "@libre-instinct/apps": "workspace:*",
-    "@libre-instinct/computer": "workspace:*",
-    "@libre-instinct/core": "workspace:*",
-    "@libre-instinct/inkbox": "workspace:*",
-    "@libre-instinct/network": "workspace:*"
+    "@open-instinct/apps": "workspace:*",
+    "@open-instinct/computer": "workspace:*",
+    "@open-instinct/core": "workspace:*",
+    "@open-instinct/inkbox": "workspace:*",
+    "@open-instinct/network": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

@@ -5,7 +5,7 @@
  * correct as the API evolves. The identity is fetched once and cached.
  */
 import { Inkbox, type AgentIdentity } from "@inkbox/sdk";
-import type { InboundMessage, OutboundMessage, Outbox, Principal } from "@libre-instinct/core";
+import type { InboundMessage, OutboundMessage, Outbox, Principal } from "@open-instinct/core";
 
 export interface InkboxChannelOptions {
   apiKey: string;

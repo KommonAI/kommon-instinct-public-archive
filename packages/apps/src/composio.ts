@@ -1,4 +1,4 @@
-import type { RegisteredTool, StateDir } from "@libre-instinct/core";
+import type { RegisteredTool, StateDir } from "@open-instinct/core";
 import { Composio } from "@composio/core";
 import { McpClient, StreamableHttpTransport } from "@earendil-works/pi-mcp";
 import { wrapMcpTools, type McpToolSource } from "./wrap.js";
@@ -221,7 +221,7 @@ function defaultCreateComposio(apiKey: string): ComposioClientLike {
 }
 
 async function defaultConnectMcp(mcp: McpEndpoint): Promise<McpToolSource> {
-  const client = new McpClient({ name: "libre-instinct-apps", version: "0.1.0" });
+  const client = new McpClient({ name: "open-instinct-apps", version: "0.1.0" });
   await client.connect(new StreamableHttpTransport({ url: mcp.url, headers: mcp.headers ?? {} }));
   return client;
 }

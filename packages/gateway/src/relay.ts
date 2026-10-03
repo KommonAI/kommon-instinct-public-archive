@@ -1,5 +1,5 @@
-import { encodeEvent } from "@libre-instinct/core";
-import { verifyInkboxSignature } from "@libre-instinct/inkbox";
+import { encodeEvent } from "@open-instinct/core";
+import { verifyInkboxSignature } from "@open-instinct/inkbox";
 import { type Logger, silentLogger } from "./logger.js";
 import { DEFAULT_MARITIME_BASE_URL } from "./provision.js";
 import type { UserRecord } from "./store.js";

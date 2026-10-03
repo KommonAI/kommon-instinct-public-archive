@@ -47,7 +47,7 @@ describe("gateway http", () => {
     const page = await fetch(base);
     expect(page.headers.get("content-type")).toContain("text/html");
     const text = await page.text();
-    expect(text).toContain("LibreInstinct");
+    expect(text).toContain("Open Instinct");
     expect(text).toContain('action="/api/signup"');
     expect(text).not.toContain("inviteCode");
     expect(text).toContain("github.com");

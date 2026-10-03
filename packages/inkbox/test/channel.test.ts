@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Principal } from "@libre-instinct/core";
+import type { Principal } from "@open-instinct/core";
 import { InkboxChannel, parseConversationKey, splitMessageText } from "../src/channel.js";
 import { fakeFetch, rawIdentity, type Recorded } from "./fake-fetch.js";
 

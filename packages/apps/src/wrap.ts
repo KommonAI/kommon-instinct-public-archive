@@ -1,4 +1,4 @@
-import type { Capability, RegisteredTool, ToolContext, ToolMeta, ToolResultLike, ToolSpec } from "@libre-instinct/core";
+import type { Capability, RegisteredTool, ToolContext, ToolMeta, ToolResultLike, ToolSpec } from "@open-instinct/core";
 import { toLlmContent, type CallToolResult, type Tool as McpTool } from "@earendil-works/pi-mcp";
 import { Type, type TSchema } from "typebox";
 import { capabilitiesForSlug } from "./capabilities.js";
@@ -50,7 +50,7 @@ export function metaFor(slug: string, capabilities: Capability[] = capabilitiesF
 const MULTI_EXECUTE_NOTE =
   " Runs several Composio tools in one call, so the policy guard cannot check them one by one. Prefer the direct app_ tools.";
 
-/** Wrap one MCP tool as an LibreInstinct RegisteredTool. */
+/** Wrap one MCP tool as an Open Instinct RegisteredTool. */
 export function wrapMcpTool(source: McpToolSource, tool: McpTool): RegisteredTool {
   const slug = tool.name;
   const upper = slug.toUpperCase();

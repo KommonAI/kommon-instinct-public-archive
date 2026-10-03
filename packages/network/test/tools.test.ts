@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { Contact } from "@libre-instinct/core";
+import type { Contact } from "@open-instinct/core";
 import { networkTools } from "../src/tools.js";
 import { agentPrincipal, config, contactPrincipal, ctx, fakeA2a, fakeAudit, fakeContacts, fakeOutbox, fakePolicy, fakeProvisioner, owner, run, stranger } from "./fakes.js";
 

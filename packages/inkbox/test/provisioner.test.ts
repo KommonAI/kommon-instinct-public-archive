@@ -15,10 +15,10 @@ describe("InkboxProvisioner.provisionIdentity", () => {
       "GET /api/v1/identities/sam-instinct": { status: 404, body: { detail: "not found" } },
       "POST /api/v1/identities/": (req: Recorded) => ({ body: rawIdentity({ id: "ident_2", agent_handle: (req.body as { agent_handle: string }).agent_handle, email_address: "sam-instinct@inkbox.ai", phone_number: null }) }),
     });
-    const out = await provisioner(fake).provisionIdentity({ handle: "@Sam-Instinct", displayName: "Sam's Instinct", description: "LibreInstinct agent" });
+    const out = await provisioner(fake).provisionIdentity({ handle: "@Sam-Instinct", displayName: "Sam's Instinct", description: "Open Instinct agent" });
     expect(out).toEqual({ identityId: "ident_2", handle: "sam-instinct", email: "sam-instinct@inkbox.ai", imessageEnabled: true, tunnelHost: "maria-instinct.tunnels.inkbox.ai" });
     const post = fake.calls.find((c) => c.method === "POST")!;
-    expect(post.body).toEqual({ agent_handle: "sam-instinct", display_name: "Sam's Instinct", description: "LibreInstinct agent", imessage_enabled: true });
+    expect(post.body).toEqual({ agent_handle: "sam-instinct", display_name: "Sam's Instinct", description: "Open Instinct agent", imessage_enabled: true });
     expect(post.headers["x-api-key"]).toBe("ik_admin");
     expect(post.headers["content-type"]).toBe("application/json");
   });

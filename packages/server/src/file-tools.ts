@@ -13,8 +13,8 @@ import {
   createReadTool,
   createWriteTool,
 } from "@earendil-works/pi-coding-agent";
-import { defineTool } from "@libre-instinct/core";
-import type { Capability, RegisteredTool, ToolMeta, ToolResultLike } from "@libre-instinct/core";
+import { defineTool } from "@open-instinct/core";
+import type { Capability, RegisteredTool, ToolMeta, ToolResultLike } from "@open-instinct/core";
 
 const READ: Capability[] = ["files.read"];
 const WRITE: Capability[] = ["files.write"];

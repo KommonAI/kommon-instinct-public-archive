@@ -1,8 +1,8 @@
 import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { encodeEvent } from "@libre-instinct/core";
-import type { HandleResult, InboundMessage, InstinctConfig } from "@libre-instinct/core";
+import { encodeEvent } from "@open-instinct/core";
+import type { HandleResult, InboundMessage, InstinctConfig } from "@open-instinct/core";
 import { ACK_TEXT, createHttpServer, type HttpApp } from "../src/http.js";
 
 const config: InstinctConfig = {

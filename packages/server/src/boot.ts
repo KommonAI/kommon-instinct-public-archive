@@ -22,13 +22,13 @@ import {
   loadPolicy,
   resolveDataDir,
   resolveModel,
-} from "@libre-instinct/core";
-import type { InstinctConfig, Outbox, RegisteredTool } from "@libre-instinct/core";
-import { InkboxA2A, InkboxChannel, InkboxProvisioner, messagingTools } from "@libre-instinct/inkbox";
-import { computerGuidance, detectComputer } from "@libre-instinct/computer";
-import type { ComputerBackend } from "@libre-instinct/computer";
-import { ComposioApps, DEFAULT_TOOLKITS, appsGuidance } from "@libre-instinct/apps";
-import { networkTools } from "@libre-instinct/network";
+} from "@open-instinct/core";
+import type { InstinctConfig, Outbox, RegisteredTool } from "@open-instinct/core";
+import { InkboxA2A, InkboxChannel, InkboxProvisioner, messagingTools } from "@open-instinct/inkbox";
+import { computerGuidance, detectComputer } from "@open-instinct/computer";
+import type { ComputerBackend } from "@open-instinct/computer";
+import { ComposioApps, DEFAULT_TOOLKITS, appsGuidance } from "@open-instinct/apps";
+import { networkTools } from "@open-instinct/network";
 import { ConsoleOutbox } from "./console-outbox.js";
 import { fileTools } from "./file-tools.js";
 import { createScheduleSync, type ScheduleSync } from "./maritime-schedules.js";

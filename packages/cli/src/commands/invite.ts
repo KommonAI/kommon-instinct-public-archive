@@ -3,13 +3,13 @@
  * and, when we have an admin key, create an Inkbox A2A invitation their agent
  * can accept.
  */
-import { ContactStore, TIER_ORDER, normalizeHandle, type Tier } from "@libre-instinct/core";
+import { ContactStore, TIER_ORDER, normalizeHandle, type Tier } from "@open-instinct/core";
 import { parse, str, type OptionSpec } from "../args.js";
 import type { CliContext } from "../context.js";
 import { UsageError } from "../io.js";
 import { makeProvisioner } from "../inkbox-client.js";
 import { readSecrets } from "../secrets.js";
-import { loadConfig } from "@libre-instinct/core";
+import { loadConfig } from "@open-instinct/core";
 
 export const inviteOptions: OptionSpec = {
   tier: { type: "string" },

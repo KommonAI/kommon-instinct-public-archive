@@ -1,7 +1,7 @@
 {
-  "name": "@libre-instinct/core",
+  "name": "@open-instinct/core",
   "version": "0.1.0",
-  "description": "LibreInstinct agent runtime: Pi agent loop, prompt builder, policy engine, memory, scheduler, audit, shared types",
+  "description": "Open Instinct agent runtime: Pi agent loop, prompt builder, policy engine, memory, scheduler, audit, shared types",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

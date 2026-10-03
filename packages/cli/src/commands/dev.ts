@@ -9,7 +9,7 @@ import type { CliContext } from "../context.js";
 import { readSecrets, applySecretsToEnv } from "../secrets.js";
 
 /**
- * The slice of @libre-instinct/server the CLI calls. Only `boot` and
+ * The slice of @open-instinct/server the CLI calls. Only `boot` and
  * `createHttpServer` are required; the webhook helpers are used when present.
  */
 export interface ServerModule {
@@ -53,9 +53,9 @@ export interface TunnelHandle {
 export type TunnelConnector = (opts: { apiKey: string; handle: string; forwardTo: string; log: (m: string) => void }) => Promise<TunnelHandle>;
 
 async function defaultImportServer(): Promise<ServerModule> {
-  const mod = (await import("@libre-instinct/server")) as unknown as Partial<ServerModule>;
+  const mod = (await import("@open-instinct/server")) as unknown as Partial<ServerModule>;
   if (typeof mod.boot !== "function" || typeof mod.createHttpServer !== "function") {
-    throw new Error("@libre-instinct/server does not export boot and createHttpServer");
+    throw new Error("@open-instinct/server does not export boot and createHttpServer");
   }
   return mod as ServerModule;
 }
@@ -106,7 +106,7 @@ export async function runDev(ctx: CliContext, argv: string[]): Promise<number> {
     httpServer.listen(port, host, () => resolve());
   });
 
-  ctx.print(`${c.green("LibreInstinct is running")} on http://127.0.0.1:${port}  (data: ${ctx.dataDir})`);
+  ctx.print(`${c.green("Open Instinct is running")} on http://127.0.0.1:${port}  (data: ${ctx.dataDir})`);
   ctx.print(`  chat:   instinct chat "hello" --url http://127.0.0.1:${port}`);
   ctx.print(`  status: instinct status --url http://127.0.0.1:${port}`);
 

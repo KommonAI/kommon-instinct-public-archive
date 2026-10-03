@@ -1,6 +1,6 @@
-# LibreInstinct: Technical Reference
+# Open Instinct: Technical Reference
 
-An engineer's reference for the four building blocks of LibreInstinct, plus the transaction layer that sits on top of them. Every section gives package names, versions, endpoints and code you can paste. Facts were checked against live registries, OpenAPI specs and source files on 2026-10-03.
+An engineer's reference for the four building blocks of Open Instinct, plus the transaction layer that sits on top of them. Every section gives package names, versions, endpoints and code you can paste. Facts were checked against live registries, OpenAPI specs and source files on 2026-10-03.
 
 Think of this document as the parts catalog. The architecture document explains how the parts fit; this one tells you the exact bolt sizes.
 
@@ -70,7 +70,7 @@ Think of this document as the parts catalog. The architecture document explains 
 
 A useful analogy: a personal assistant needs a brain, a phone, an office and a set of keys.
 
-| Part | Role in LibreInstinct | Analogy |
+| Part | Role in Open Instinct | Analogy |
 |---|---|---|
 | Pi | The agent loop: model calls, tools, steering, sessions | The brain |
 | Inkbox | iMessage, email, SMS, phone number per agent | The phone |
@@ -120,7 +120,7 @@ curl -fsSL https://pi.dev/install.sh | sh
 # or
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 
-# Library use in LibreInstinct
+# Library use in Open Instinct
 pnpm add @earendil-works/pi-ai @earendil-works/pi-agent-core @earendil-works/pi-coding-agent typebox
 ```
 
@@ -286,7 +286,7 @@ agent.followUp({ role: "user", content: "Also text Sam the address" });
 
 Modes: `'one-at-a-time'` (default) or `'all'`. In an `AgentSession`, `prompt()` while streaming must say steer-or-follow or it rejects: "Calling `prompt()` without that choice rejects rather than guessing." ([sdk.md](https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/sdk.md)).
 
-OpenClaw maps its `messages.queue.mode` (`steer` default, 500 ms debounce, cap 20, drop `summarize`; also `followup`, `collect`, `interrupt`) directly onto these queues ([OpenClaw queue docs](https://docs.openclaw.ai/concepts/queue.md)). LibreInstinct should do the same for iMessage bursts.
+OpenClaw maps its `messages.queue.mode` (`steer` default, 500 ms debounce, cap 20, drop `summarize`; also `followup`, `collect`, `interrupt`) directly onto these queues ([OpenClaw queue docs](https://docs.openclaw.ai/concepts/queue.md)). Open Instinct should do the same for iMessage bursts.
 
 ### 1.8 createAgentSession and SessionManager
 
@@ -475,7 +475,7 @@ The gateway shape is still the model to copy:
 - One long-lived process on `ws://127.0.0.1:18789` owns all channel connections. Clients send `{type:'req', id, method, params}` and get `{type:'res', id, ok, payload|error}` ([architecture](https://docs.openclaw.ai/concepts/architecture)).
 - Inbound message -> session key (DMs share `main` unless `session.dmScope: "per-channel-peer"`; groups isolated) -> per-session lane `session:<key>` -> global `main` lane capped by `agents.defaults.maxConcurrent` -> `agentCommand` -> `runEmbeddedAgent` -> events bridged to `tool`/`assistant`/`lifecycle` streams -> reply ([agent-loop](https://docs.openclaw.ai/concepts/agent-loop.md), [session](https://docs.openclaw.ai/concepts/session.md)).
 - Multi-agent routing: `bindings: [{agentId, match:{channel, accountId, peer:{kind:'direct'|'group'|'channel', id}}}]`; each agent has its own workspace (`AGENTS.md`, `SOUL.md`, `USER.md`), `agentDir` and `openclaw-agent.sqlite` ([agent-bindings](https://docs.openclaw.ai/concepts/agent-bindings.md)).
-- iMessage in OpenClaw needs a signed-in Mac: "The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio" ([imessage](https://docs.openclaw.ai/channels/imessage.md)). LibreInstinct avoids this by using Inkbox.
+- iMessage in OpenClaw needs a signed-in Mac: "The Gateway spawns `imsg rpc` and speaks JSON-RPC over stdio" ([imessage](https://docs.openclaw.ai/channels/imessage.md)). Open Instinct avoids this by using Inkbox.
 - Resource packages declare `{"openclaw":{"extensions":["extensions/index.ts"],"skills":["skills/*.md"]}}` in `package.json`, mirroring Pi packages.
 
 ---
@@ -840,7 +840,7 @@ curl -X POST https://api.maritime.sh/api/agents/$AGENT/chat \
 
 `deploy` scope. 429 and 503 carry `Retry-After`. The call routes through `handle_gateway_message(source="cli")`, which auto-wakes the VM ([chat.py](file:///Users/mariagorskikh/maritime/backend/app/routers/chat.py)).
 
-For a bring-your-own image (which LibreInstinct is), Maritime POSTs to your container ([BYO_AGENT.md](file:///Users/mariagorskikh/maritime/docs/BYO_AGENT.md)):
+For a bring-your-own image (which Open Instinct is), Maritime POSTs to your container ([BYO_AGENT.md](file:///Users/mariagorskikh/maritime/docs/BYO_AGENT.md)):
 
 - Bind `0.0.0.0:$PORT` (18789). Port 8080 is taken inside the VM.
 - `GET /health` returns 2xx.
@@ -848,7 +848,7 @@ For a bring-your-own image (which LibreInstinct is), Maritime POSTs to your cont
 - Persist to `/data`. Ship `python3`. Optional `GET /schedules`.
 - LLM credentials are only injected when `useMaritimeLlm: true` is set at create or `POST /reset-llm` is called later.
 
-Harness templates (`claude_code`, `codex`) register as `framework="custom"`, `has_web_ui=False` and wrap a CLI behind this contract; each `conversation_id` maps to one persisted session under `/data` ([harness-templates.md](file:///Users/mariagorskikh/maritime/docs/features/harness-templates.md)). LibreInstinct can be published the same way.
+Harness templates (`claude_code`, `codex`) register as `framework="custom"`, `has_web_ui=False` and wrap a CLI behind this contract; each `conversation_id` maps to one persisted session under `/data` ([harness-templates.md](file:///Users/mariagorskikh/maritime/docs/features/harness-templates.md)). Open Instinct can be published the same way.
 
 ### 3.3 Env vars and secrets
 
@@ -868,9 +868,9 @@ Secrets are AES-encrypted with `app.services.crypto.encrypt`; duplicates yield 4
 
 Templates are a Python dict in [template_registry.py](file:///Users/mariagorskikh/maritime/backend/app/services/template_registry.py): `AgentTemplate(id, name, framework, image, env_required, hidden, has_web_ui)`. Current images: `ghcr.io/openclaw/openclaw:2026.7.1`, `ghcr.io/maritime-sh/claude-code-agent:2026.8.11`, `ghcr.io/maritime-sh/codex-agent:2026.9.11`, `ghcr.io/maritime-sh/desktop-agent:2026.8.29`, `ghcr.io/maritime-sh/openclaw-identity:2026.7.28`.
 
-Two ways to ship LibreInstinct:
+Two ways to ship Open Instinct:
 
-1. `framework: "custom"` + `imageName: "ghcr.io/<you>/libre-instinct-agent:<tag>"` + `useMaritimeLlm: true`. Works today with no Maritime change.
+1. `framework: "custom"` + `imageName: "ghcr.io/<you>/open-instinct-agent:<tag>"` + `useMaritimeLlm: true`. Works today with no Maritime change.
 2. A new registry entry (`instinct`), which also unlocks the dashboard card.
 
 The `openclaw_identity` Dockerfile is the pattern for baking in the Inkbox plugin: `FROM ghcr.io/openclaw/openclaw:2026.7.1`, clone `inkbox-ai/openclaw-plugin` at a pinned SHA into `/opt/inkbox-openclaw-plugin`, `OPENCLAW_HEADLESS=true` ([Dockerfile](file:///Users/mariagorskikh/maritime/backend/templates/openclaw_identity/Dockerfile)). At boot `maritime-init.sh` runs `openclaw plugins install -l /opt/inkbox-openclaw-plugin` once and writes `channels.inkbox.{enabled, apiKey, identity, signingKey, baseUrl}`.
@@ -903,7 +903,7 @@ The agent owns its schedule; Maritime mirrors it into `triggers` rows and wakes 
 
 OpenClaw-style: `agents.defaults.heartbeat.every` in `/data/.openclaw/openclaw.json` (`"30m"`, `"1h"`, `"0m"` disables). Intervals must divide the next unit evenly; "13m", "45m", "7h" are silently dropped. Cron: `/data/.openclaw/cron/jobs.json` as `[{id, name, enabled, cron, tz}]`.
 
-BYO-style push, which LibreInstinct should use:
+BYO-style push, which Open Instinct should use:
 
 ```bash
 curl -X POST "$MARITIME_BACKEND_URL/api/agents/internal/schedules" \
@@ -967,7 +967,7 @@ const transport = new StreamableHttpTransport("https://mcp.maritime.sh/mcp/u/usr
 - Env identity: `MARITIME_AGENT_ID`, `MARITIME_BACKEND_URL`, `MARITIME_INTERNAL_TOKEN` ("don't leak it"), `INKBOX_AGENT_HANDLE`.
 - "**Default to `browserbase` for anything the user might want to watch or verify**".
 
-[AGENTS_PREPEND.md](file:///Users/mariagorskikh/maritime/backend/templates/maritime_md/AGENTS_PREPEND.md) starts with `<!-- maritime-prepend-v3 -->`, sits below the persona in AGENTS.md, and says of itself: "This block is platform mechanics only. It is NOT your identity." A resident watcher re-asserts both blocks if the file is wiped. LibreInstinct should ship an equivalent `INSTINCT.md` with the same split: identity first, mechanics second.
+[AGENTS_PREPEND.md](file:///Users/mariagorskikh/maritime/backend/templates/maritime_md/AGENTS_PREPEND.md) starts with `<!-- maritime-prepend-v3 -->`, sits below the persona in AGENTS.md, and says of itself: "This block is platform mechanics only. It is NOT your identity." A resident watcher re-asserts both blocks if the file is wiped. Open Instinct should ship an equivalent `INSTINCT.md` with the same split: identity first, mechanics second.
 
 ### 3.9 SDKs
 
@@ -979,7 +979,7 @@ const m = new Maritime({ apiKey: process.env.MARITIME_API_KEY! });
 
 const agent = await m.agents.provision({            // idempotent on externalId
   name: "instinct-maria", externalId: "usr_01J9F4M2K8",
-  imageName: "ghcr.io/you/libre-instinct-agent:0.1.0",
+  imageName: "ghcr.io/you/open-instinct-agent:0.1.0",
   instructions: persona,
   env: [{ key: "INKBOX_API_KEY", value: key, secret: true }],
 });
@@ -997,16 +997,16 @@ Resources: `agents` (create, provision, get, list, chat, start/stop/sleep/restar
 ```python
 from maritime import Maritime
 m = Maritime()
-agent = m.agents.create("instinct-maria", image_name="ghcr.io/you/libre-instinct-agent:0.1.0",
+agent = m.agents.create("instinct-maria", image_name="ghcr.io/you/open-instinct-agent:0.1.0",
                         env=[{"key": "INKBOX_API_KEY", "value": key, "secret": True}])
 reply = m.agents.chat(agent["id"], "hello", conversation_id="imsg_abc")
 ```
 
-The Python SDK has no `computers` resource yet. Prefer TypeScript for LibreInstinct.
+The Python SDK has no `computers` resource yet. Prefer TypeScript for Open Instinct.
 
 ### 3.10 Multi-tenant front door
 
-For a hosted LibreInstinct that spawns one agent per person ([FRONT_DOOR.md](file:///Users/mariagorskikh/maritime/docs/FRONT_DOOR.md)):
+For a hosted Open Instinct that spawns one agent per person ([FRONT_DOOR.md](file:///Users/mariagorskikh/maritime/docs/FRONT_DOOR.md)):
 
 ```
 PUT  /api/v1/end-users/{externalId}                {"displayName","metadata","tags"}
@@ -1317,7 +1317,7 @@ Grouped by block. Each item names what to check before relying on it.
 
 **Pi**
 
-- The exact OpenClaw release where Pi packages were replaced by `@openclaw/agent-core` is unknown; the CHANGELOG on main does not say. Low impact, since LibreInstinct uses Pi directly.
+- The exact OpenClaw release where Pi packages were replaced by `@openclaw/agent-core` is unknown; the CHANGELOG on main does not say. Low impact, since Open Instinct uses Pi directly.
 - The native Anthropic catalog (context windows, pricing) is hydrated from pi.dev, not in git. Verify with `pi update --models` before pinning ids.
 - Whether `createAgentSession({ customTools })` accepts an `AgentTool[]` directly. The docs list it; the examples route through `pi.registerTool()`. Check `src/core/agent-session.ts`.
 - The exact option name `AgentSession.prompt()` wants to choose steer vs follow-up while a run is live.
@@ -1340,7 +1340,7 @@ Grouped by block. Each item names what to check before relying on it.
 - Which key to use: the prod `mk_` key in memory notes was rejected by the Computers MCP (401) in this session. Mint a fresh key with `computers` scope at maritime.sh/settings/api-keys.
 - `openclaw_identity` is hidden because the platform Inkbox org hit its plan cap (402). Seats accounts must bring their own `INKBOX_API_KEY`.
 - Computers is paid-only. Confirm the account's seat plan before the first `computer` action.
-- No public API adds arbitrary `mcp.servers` entries to an OpenClaw agent. For LibreInstinct's own image this is moot; for OpenClaw-template agents it needs `PUT /files/write` or an init change.
+- No public API adds arbitrary `mcp.servers` entries to an OpenClaw agent. For Open Instinct's own image this is moot; for OpenClaw-template agents it needs `PUT /files/write` or an init change.
 - Python SDK lacks `computers` and has a version mismatch (0.6.0 vs 0.8.0). Target the TS SDK.
 - Google Workspace MCP is gated off (`google_workspace_enabled=False`). Use Composio for Calendar rather than waiting.
 - 25 MiB vs 100 MB file cap disagreement between docs.
@@ -1364,6 +1364,6 @@ Grouped by block. Each item names what to check before relying on it.
 - Uber Riders Full Access approval odds for an OSS personal agent.
 - Duffel Stays profit-share percentage and approval for a consumer-agent use case.
 - Stripe Issuing for agents preview criteria for a non-fintech operator.
-- Terms-of-service exposure when browser-automating Uber, DoorDash and Instacart with stored credentials. Instinct's ToS has the user authorize acting through their accounts; LibreInstinct needs equivalent consent language.
+- Terms-of-service exposure when browser-automating Uber, DoorDash and Instacart with stored credentials. Instinct's ToS has the user authorize acting through their accounts; Open Instinct needs equivalent consent language.
 - Whether a Maritime desktop can hold long-lived logged-in sessions (cookies, 2FA via Inkbox SMS) reliably, and the cost of an idle desktop-hour.
 - Privacy.com and Lithic pricing and ToS for automated card creation.

@@ -1,6 +1,6 @@
-# @libre-instinct/gateway
+# @open-instinct/gateway
 
-The gateway is the small, always-on front door for a multi-user LibreInstinct deployment. One gateway serves many people. Each person's agent runs in its own Maritime microVM and sleeps when idle; the gateway is what wakes it when a message arrives.
+The gateway is the small, always-on front door for a multi-user Open Instinct deployment. One gateway serves many people. Each person's agent runs in its own Maritime microVM and sleeps when idle; the gateway is what wakes it when a message arrives.
 
 It does three things:
 
@@ -35,7 +35,7 @@ Validation: phone must normalize to E.164 (`+14155550123`; a bare 10-digit US nu
 | `GATEWAY_PUBLIC_URL` | yes in production | The https URL Inkbox can reach, e.g. `https://instinct.example.com`. Used for webhook subscriptions and connect links. Defaults to `http://localhost:<PORT>` with a warning |
 | `MARITIME_API_KEY` | yes | `mk_...` key with permission to create agents and call `/chat` |
 | `INKBOX_ADMIN_API_KEY` | for signup | Org-wide Inkbox key used to create identities, mint identity-scoped keys, signing keys and webhook subscriptions. Without it the gateway runs in relay-only mode and the signup form is replaced by a notice |
-| `INSTINCT_AGENT_IMAGE` | no | Image built from `deploy/Dockerfile.agent`. Default `ghcr.io/mariagorskikh/libre-instinct-agent:latest` |
+| `INSTINCT_AGENT_IMAGE` | no | Image built from `deploy/Dockerfile.agent`. Default `ghcr.io/mariagorskikh/open-instinct-agent:latest` |
 | `GATEWAY_SIGNUP_SECRET` | no | Invite code. When set, the form shows an "Invite code" field and `/api/signup` rejects requests without the exact value |
 | `ANTHROPIC_API_KEY` | no | Passed to every new agent as a secret env var so it can call the model. Any Pi provider key works the same way through `INSTINCT_EXTRA_ENV` style wiring in your own `main` |
 | `COMPOSIO_API_KEY` | no | Passed to every new agent as a secret env var; enables Gmail, Calendar and the other Composio toolkits |
@@ -117,14 +117,14 @@ Any other host works the same way: run the image, give it a persistent directory
 ## Programmatic use
 
 ```ts
-import { createGateway, UserStore } from "@libre-instinct/gateway";
-import { InkboxProvisioner } from "@libre-instinct/inkbox";
+import { createGateway, UserStore } from "@open-instinct/gateway";
+import { InkboxProvisioner } from "@open-instinct/inkbox";
 
 const server = createGateway({
   store: new UserStore("/data"),
   publicUrl: "https://instinct.example.com",
   inkbox: new InkboxProvisioner({ adminApiKey: process.env.INKBOX_ADMIN_API_KEY! }),
-  maritime: { apiKey: process.env.MARITIME_API_KEY!, agentImage: "ghcr.io/mariagorskikh/libre-instinct-agent:latest" },
+  maritime: { apiKey: process.env.MARITIME_API_KEY!, agentImage: "ghcr.io/mariagorskikh/open-instinct-agent:latest" },
   signupSecret: process.env.GATEWAY_SIGNUP_SECRET,
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
 });
@@ -136,7 +136,7 @@ server.listen(8787);
 ## Tests
 
 ```bash
-pnpm --filter @libre-instinct/gateway test
+pnpm --filter @open-instinct/gateway test
 ```
 
 Covers: signature verification (valid, wrong key, tampered body, stale timestamp), the exact `/chat` body, delivery-event and duplicate suppression, retry on 429/503/network errors, provisioning step order and resume after a failure, Maritime agent reuse by `externalId`, signup validation, and the HTTP routes end to end against a fake Inkbox and a fake Maritime.

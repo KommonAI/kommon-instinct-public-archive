@@ -5,9 +5,9 @@
  */
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import { decodeEvent } from "@libre-instinct/core";
-import type { AgentRuntime, HandleResult, InboundMessage, InstinctConfig, Scheduler } from "@libre-instinct/core";
-import { parseInkboxEvent, verifyInkboxSignature } from "@libre-instinct/inkbox";
+import { decodeEvent } from "@open-instinct/core";
+import type { AgentRuntime, HandleResult, InboundMessage, InstinctConfig, Scheduler } from "@open-instinct/core";
+import { parseInkboxEvent, verifyInkboxSignature } from "@open-instinct/inkbox";
 
 /** The slice of a boot() result the HTTP layer needs. Tests pass stubs. */
 export interface HttpApp {

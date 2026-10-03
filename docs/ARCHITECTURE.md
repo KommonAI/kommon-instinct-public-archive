@@ -1,6 +1,6 @@
-# LibreInstinct: architecture
+# Open Instinct: architecture
 
-LibreInstinct is an open-source personal agent you text. Like Instinct, it has its
+Open Instinct is an open-source personal agent you text. Like Instinct, it has its
 own computer, does real tasks for you, and can coordinate with the Instincts of
 people you trust. Unlike Instinct, you can read every line, run it yourself, pick
 the model, and see exactly what each person in your life is allowed to ask it.
@@ -72,18 +72,18 @@ accounts, and Pi is the agent's brain stem.
 ## Repository layout
 
 ```
-libre-instinct/
+open-instinct/
   README.md                     start here
   docs/                         this file, PERMISSIONS.md, PROTOCOL.md, deploy and self-host guides, research/
   packages/
-    core/      @libre-instinct/core      agent runtime: Pi loop, prompt builder, policy engine, memory, scheduler, audit, types
-    inkbox/    @libre-instinct/inkbox    Inkbox adapter: provision identity, send iMessage/SMS/email, parse+verify webhooks, A2A REST
-    computer/  @libre-instinct/computer  desktop tools: in-VM desktopd (stdio MCP) or hosted Computers MCP (HTTP)
-    apps/      @libre-instinct/apps      Composio Tool Router: per-user session, MCP tools, connect links
-    network/   @libre-instinct/network   trusted network: contacts, tiers, grants, invitations, OIP envelope, A2A worker and caller
-    server/    @libre-instinct/server    the agent process: /health, /chat, /schedules, webhook intake, local dev runner
-    gateway/   @libre-instinct/gateway   multi-user relay + signup: Inkbox webhooks → Maritime agent; connect page with QR
-    cli/       @libre-instinct/cli       `instinct` command: init, dev, deploy, connect, invite, trust, status, logs
+    core/      @open-instinct/core      agent runtime: Pi loop, prompt builder, policy engine, memory, scheduler, audit, types
+    inkbox/    @open-instinct/inkbox    Inkbox adapter: provision identity, send iMessage/SMS/email, parse+verify webhooks, A2A REST
+    computer/  @open-instinct/computer  desktop tools: in-VM desktopd (stdio MCP) or hosted Computers MCP (HTTP)
+    apps/      @open-instinct/apps      Composio Tool Router: per-user session, MCP tools, connect links
+    network/   @open-instinct/network   trusted network: contacts, tiers, grants, invitations, OIP envelope, A2A worker and caller
+    server/    @open-instinct/server    the agent process: /health, /chat, /schedules, webhook intake, local dev runner
+    gateway/   @open-instinct/gateway   multi-user relay + signup: Inkbox webhooks → Maritime agent; connect page with QR
+    cli/       @open-instinct/cli       `instinct` command: init, dev, deploy, connect, invite, trust, status, logs
   skills/      SKILL.md playbooks the agent loads (travel, dining, rides, scheduling, email, research, purchases, files)
   deploy/      Dockerfile.agent, Dockerfile.gateway, docker-compose.yml, railway.json, GitHub Actions
   examples/    small runnable examples (local chat, fake Inkbox, two agents coordinating)
@@ -172,15 +172,15 @@ All tools are Pi `AgentTool`s (TypeBox schema + `execute`). Groups:
 
 | Group | Tools | Source |
 |---|---|---|
-| messaging | `send_message` (reply on current channel or to a contact: iMessage, SMS, email), `send_typing`, `react` | `@libre-instinct/inkbox` |
+| messaging | `send_message` (reply on current channel or to a contact: iMessage, SMS, email), `send_typing`, `react` | `@open-instinct/inkbox` |
 | owner | `ask_owner` (approval or question, with token), `notify_owner` | `core` |
 | memory | `memory_read`, `memory_write`, `journal_append` | `core` |
 | contacts & trust | `contacts_search`, `contacts_upsert`, `trust_set_tier`, `trust_grant`, `trust_revoke`, `trust_list` | `network` (owner only) |
 | network | `ask_instinct` (send an OIP request to another agent), `reply_instinct`, `invite_to_network` | `network` |
 | schedule | `schedule_create`, `schedule_list`, `schedule_delete` | `core` |
 | files | `read`, `write`, `edit`, `bash`, `ls`, `grep` scoped to `workspace/` | `pi-coding-agent` factories |
-| computer | `computer`, `computer_batch`, `run_shell`, `read_file`, `write_file`, `request_takeover`, `takeover_status` | `@libre-instinct/computer` via MCP |
-| apps | everything the Composio session exposes (`GMAIL_*`, `GOOGLECALENDAR_*`, …) plus `COMPOSIO_MANAGE_CONNECTIONS` | `@libre-instinct/apps` via MCP |
+| computer | `computer`, `computer_batch`, `run_shell`, `read_file`, `write_file`, `request_takeover`, `takeover_status` | `@open-instinct/computer` via MCP |
+| apps | everything the Composio session exposes (`GMAIL_*`, `GOOGLECALENDAR_*`, …) plus `COMPOSIO_MANAGE_CONNECTIONS` | `@open-instinct/apps` via MCP |
 | web | `web_search`, `web_fetch` (plain HTTP, no login) | `core` |
 
 MCP tools are wrapped with `pi-mcp`'s `toLlmContent()`; names are prefixed (`computer_`, `app_`) and

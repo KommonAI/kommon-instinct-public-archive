@@ -13,8 +13,8 @@ import type {
   RegisteredTool,
   ToolContext,
   ToolResultLike,
-} from "@libre-instinct/core";
-import type { InkboxA2A, InkboxProvisioner } from "@libre-instinct/inkbox";
+} from "@open-instinct/core";
+import type { InkboxA2A, InkboxProvisioner } from "@open-instinct/inkbox";
 import { ASSIGNABLE_TIERS, CAPABILITIES, TIERS, parseCapabilities } from "./capabilities.js";
 import { defineTool, textResult } from "./define.js";
 import { contactLine, lookupContact, slugify } from "./lookup.js";

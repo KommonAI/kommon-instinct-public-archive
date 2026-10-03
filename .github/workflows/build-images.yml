@@ -21,9 +21,9 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - name: libre-instinct-agent
+          - name: open-instinct-agent
             dockerfile: deploy/Dockerfile.agent
-          - name: libre-instinct-gateway
+          - name: open-instinct-gateway
             dockerfile: deploy/Dockerfile.gateway
     steps:
       - uses: actions/checkout@v4

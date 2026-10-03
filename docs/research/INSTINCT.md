@@ -1,6 +1,6 @@
 # What Instinct is, in detail
 
-Research notes for the LibreInstinct project. Everything here comes from public sources as of October 3, 2026. Each claim links to where it came from. Where sources disagree, both versions are shown. Where we are guessing, the guess is labeled.
+Research notes for the Open Instinct project. Everything here comes from public sources as of October 3, 2026. Each claim links to where it came from. Where sources disagree, both versions are shown. Where we are guessing, the guess is labeled.
 
 Quotes from the Invest Like the Best episode are taken from YouTube captions with filler words ("um", "like", repeated words) removed. The wording is otherwise unchanged.
 

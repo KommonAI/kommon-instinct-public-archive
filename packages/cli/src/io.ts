@@ -14,7 +14,7 @@ export interface CliIo {
   fetchImpl?: typeof fetch;
   /** Enables ANSI colors. Off by default so captured output stays plain. */
   color?: boolean;
-  /** Overrides the dynamic import of @libre-instinct/server (tests). */
+  /** Overrides the dynamic import of @open-instinct/server (tests). */
   importServer?: () => Promise<ServerModule>;
   /** Overrides how the Inkbox provisioner is built (tests). */
   createProvisioner?: ProvisionerFactory;

@@ -1,6 +1,6 @@
-# @libre-instinct/apps
+# @open-instinct/apps
 
-App tools for LibreInstinct through the Composio Tool Router. This package gives the agent
+App tools for Open Instinct through the Composio Tool Router. This package gives the agent
 Gmail, Google Calendar, Google Contacts and any other Composio toolkit as Pi tools, each tagged
 with the capability the policy engine checks.
 
@@ -37,7 +37,7 @@ mode changes, or when Composio no longer knows the saved id.
 ## Usage
 
 ```ts
-import { ComposioApps, DEFAULT_TOOLKITS, appsGuidance } from "@libre-instinct/apps";
+import { ComposioApps, DEFAULT_TOOLKITS, appsGuidance } from "@open-instinct/apps";
 
 const apps = new ComposioApps({
   apiKey: composioApiKey,          // COMPOSIO_API_KEY, read by the server, never by this package
@@ -149,7 +149,7 @@ people, not instructions.
 ## Testing
 
 ```
-pnpm --filter @libre-instinct/apps test
+pnpm --filter @open-instinct/apps test
 ```
 
 Tests cover the capability table, tool naming and schema wrapping, result conversion (text,

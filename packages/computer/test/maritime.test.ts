@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CallToolResult, JsonRpcMessage, Tool } from "@earendil-works/pi-mcp";
 import { createInMemoryTransportPair, type InMemoryTransport } from "@earendil-works/pi-mcp/testing";
-import type { Principal, RegisteredTool, ToolContext } from "@libre-instinct/core";
+import type { Principal, RegisteredTool, ToolContext } from "@open-instinct/core";
 import { MaritimeMcpBackend, maritimeMcpEndpoint } from "../src/index.js";
 import { PNG_B64 } from "./fake-fetch.js";
 

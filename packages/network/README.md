@@ -1,6 +1,6 @@
-# @libre-instinct/network
+# @open-instinct/network
 
-The trusted network for LibreInstinct: who your agent knows, how much each person may ask of it, and how it talks to their agents.
+The trusted network for Open Instinct: who your agent knows, how much each person may ask of it, and how it talks to their agents.
 
 This package gives the agent nine tools and one prompt section. It owns no state of its own. Contacts live in core's `ContactStore`, grants in core's `PolicyEngine`, and every change lands in core's `AuditLog`. The package depends on core for types only, so it can be tested on its own.
 
@@ -68,7 +68,7 @@ Grants change the policy in memory. Pass `onPolicyChange` in the deps to persist
 
 ## OIP/1, the typed envelope
 
-Two LibreInstincts speak A2A 1.0 through Inkbox. Every message has a plain text part that any agent can read and a `data` part with a typed intent that ours can act on precisely. The data part is OIP/1 (LibreInstinct Protocol, version 1). The full spec is [docs/PROTOCOL.md](../../docs/PROTOCOL.md).
+Two Open Instincts speak A2A 1.0 through Inkbox. Every message has a plain text part that any agent can read and a `data` part with a typed intent that ours can act on precisely. The data part is OIP/1 (Open Instinct Protocol, version 1). The full spec is [docs/PROTOCOL.md](../../docs/PROTOCOL.md).
 
 ```json
 {
@@ -121,7 +121,7 @@ Replies are asynchronous. `ask_instinct` returns at once with the task and conte
 
 ## Worked example: dinner between two agents
 
-Maria and Sam are partners. Each has an LibreInstinct. Maria's agent has the handle `maria-instinct`, Sam's has `sam-instinct`. Maria has Sam at tier `partner`; Sam has Maria at tier `partner`.
+Maria and Sam are partners. Each has an Open Instinct. Maria's agent has the handle `maria-instinct`, Sam's has `sam-instinct`. Maria has Sam at tier `partner`; Sam has Maria at tier `partner`.
 
 **1. Maria asks.** Maria texts her agent: "Set up dinner with Sam this week, Tue or Thu after 7."
 
@@ -250,7 +250,7 @@ import {
   resolveA2aPrincipal, normalizeAgentHandle,
   // helpers
   lookupContact, slugify, phoneKey, CAPABILITIES, TIERS, ASSIGNABLE_TIERS, isCapability, isTier, parseCapabilities,
-} from "@libre-instinct/network";
+} from "@open-instinct/network";
 ```
 
 `networkTools(deps)` takes:
@@ -262,8 +262,8 @@ interface NetworkToolDeps {
   config: InstinctConfig;       // core; agent.handle and owner.name go into on_behalf_of
   audit: AuditLog;              // core
   outbox: Outbox;               // core; used when a contact has no Instinct
-  a2a?: InkboxA2A;              // @libre-instinct/inkbox; omit and ask_instinct always falls back to text
-  provisioner?: InkboxProvisioner; // @libre-instinct/inkbox; omit and invite_to_network explains the manual path
+  a2a?: InkboxA2A;              // @open-instinct/inkbox; omit and ask_instinct always falls back to text
+  provisioner?: InkboxProvisioner; // @open-instinct/inkbox; omit and invite_to_network explains the manual path
   onPolicyChange?: (policy: Policy) => void; // persist grants, e.g. savePolicy(state, policy)
 }
 ```
@@ -273,9 +273,9 @@ interface NetworkToolDeps {
 ## Wiring it in
 
 ```ts
-import { networkTools, networkGuidance } from "@libre-instinct/network";
-import { InkboxA2A, InkboxProvisioner } from "@libre-instinct/inkbox";
-import { savePolicy } from "@libre-instinct/core";
+import { networkTools, networkGuidance } from "@open-instinct/network";
+import { InkboxA2A, InkboxProvisioner } from "@open-instinct/inkbox";
+import { savePolicy } from "@open-instinct/core";
 
 registry.registerMany(
   networkTools({
@@ -300,7 +300,7 @@ const text = oip ? `${msg.text}\n\n${describeOip(oip)}` : msg.text;
 ## Tests
 
 ```
-pnpm --filter @libre-instinct/network test
+pnpm --filter @open-instinct/network test
 ```
 
 Covered: OIP encode/decode round trips for every intent and rejection of junk; `oipToText` for every intent including time zone handling; contact lookup by every reference form and refusal to guess between similar names; every tool's permission check with a stub A2A client, a stub outbox and a stub provisioner that record their calls; `resolveA2aPrincipal`; `networkGuidance` per tier.

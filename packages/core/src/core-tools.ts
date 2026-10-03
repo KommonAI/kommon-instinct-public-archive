@@ -255,7 +255,7 @@ function webFetchTool({ fetchImpl }: CoreToolDeps): RegisteredTool {
       if (!target) return { content: [{ type: "text", text: `Only http and https URLs can be fetched: ${url}` }], isError: true };
       const res = await doFetch(target.toString(), {
         signal: signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        headers: { "user-agent": "libre-instinct/0.1 (+https://github.com/mariagorskikh/libre-instinct)", accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5" },
+        headers: { "user-agent": "open-instinct/0.1 (+https://github.com/mariagorskikh/open-instinct)", accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5" },
         redirect: "follow",
       });
       const type = res.headers.get("content-type") ?? "";
@@ -312,7 +312,7 @@ async function duckDuckGoSearch(doFetch: typeof fetch, query: string, signal?: A
   url.searchParams.set("q", query);
   const res = await doFetch(url.toString(), {
     signal: signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    headers: { "user-agent": "Mozilla/5.0 (compatible; libre-instinct/0.1)", accept: "text/html" },
+    headers: { "user-agent": "Mozilla/5.0 (compatible; open-instinct/0.1)", accept: "text/html" },
   });
   if (!res.ok) throw new Error(`DuckDuckGo search failed: HTTP ${res.status}`);
   return parseDuckDuckGoHtml(await res.text()).slice(0, SEARCH_RESULTS);

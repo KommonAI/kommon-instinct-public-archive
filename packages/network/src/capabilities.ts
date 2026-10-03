@@ -1,4 +1,4 @@
-import type { Capability, Tier } from "@libre-instinct/core";
+import type { Capability, Tier } from "@open-instinct/core";
 
 /** Local mirror of core's TIER_ORDER, highest first. */
 export const TIERS: readonly Tier[] = ["owner", "partner", "family", "friend", "contact", "stranger"];

@@ -66,7 +66,7 @@ If the SessionManager API fights you, persist `agent.state.messages` as JSONL yo
 MCP client (pi-mcp):
 ```ts
 import { McpClient, StdioTransport, StreamableHttpTransport, toLlmContent } from "@earendil-works/pi-mcp";
-const client = new McpClient({ name: "libre-instinct", version: "0.1.0" });
+const client = new McpClient({ name: "open-instinct", version: "0.1.0" });
 await client.connect(new StdioTransport({ command: "maritime-computer-mcp", args: [] }));            // in-VM desktop
 await client.connect(new StreamableHttpTransport({ url, headers: { Authorization: `Bearer ${key}` } })); // hosted
 const tools = await client.listTools(); const r = await client.callTool(name, args, { signal }); toLlmContent(r);

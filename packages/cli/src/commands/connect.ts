@@ -9,7 +9,7 @@ import type { CliContext } from "../context.js";
 import { CliError } from "../io.js";
 import { makeProvisioner } from "../inkbox-client.js";
 import { readSecrets } from "../secrets.js";
-import { loadConfig } from "@libre-instinct/core";
+import { loadConfig } from "@open-instinct/core";
 
 export interface ConnectTarget {
   apiKey: string;

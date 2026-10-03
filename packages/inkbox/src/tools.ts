@@ -4,8 +4,8 @@
  * express: a non-owner may only speak in their own thread or to the owner.
  */
 import { Type } from "typebox";
-import { defineTool, normalizeHandle, normalizePhone, textResult } from "@libre-instinct/core";
-import type { Contact, ContactStore, InstinctConfig, OutboundMessage, RegisteredTool, ToolContext } from "@libre-instinct/core";
+import { defineTool, normalizeHandle, normalizePhone, textResult } from "@open-instinct/core";
+import type { Contact, ContactStore, InstinctConfig, OutboundMessage, RegisteredTool, ToolContext } from "@open-instinct/core";
 import type { InkboxChannel } from "./channel.js";
 import { parseConversationKey } from "./channel.js";
 

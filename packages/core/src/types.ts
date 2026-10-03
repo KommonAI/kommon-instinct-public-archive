@@ -1,5 +1,5 @@
 /**
- * Shared types for LibreInstinct. Every package builds against these.
+ * Shared types for Open Instinct. Every package builds against these.
  * Keep this file dependency-free (no runtime imports).
  */
 

@@ -4,8 +4,8 @@
  * say to the model. Every field is read defensively; the wire shape has moved
  * between SDK versions and will move again.
  */
-import { normalizePhone } from "@libre-instinct/core";
-import type { InboundMessage } from "@libre-instinct/core";
+import { normalizePhone } from "@open-instinct/core";
+import type { InboundMessage } from "@open-instinct/core";
 
 type Dict = Record<string, unknown>;
 

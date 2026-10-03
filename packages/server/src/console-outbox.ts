@@ -3,7 +3,7 @@
  * Nothing leaves the process: messages are logged and the last one per
  * conversation is kept so a caller can read what the agent "sent".
  */
-import type { Outbox, OutboundMessage, Principal } from "@libre-instinct/core";
+import type { Outbox, OutboundMessage, Principal } from "@open-instinct/core";
 
 export interface ConsoleOutboxOptions {
   logger?: (m: string) => void;

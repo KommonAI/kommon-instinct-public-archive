@@ -1,8 +1,8 @@
 # OIP/1: how two Instincts talk
 
-LibreInstinct Protocol version 1 is a thin layer on top of A2A 1.0 as hosted by Inkbox. Plain
+Open Instinct Protocol version 1 is a thin layer on top of A2A 1.0 as hosted by Inkbox. Plain
 text carries the request so any A2A agent can read it. A structured `data` part carries a typed
-intent so two LibreInstincts can be precise.
+intent so two Open Instincts can be precise.
 
 ## Transport
 
@@ -53,8 +53,8 @@ Every A2A message has two parts:
 ]
 ```
 
-The `text` is authoritative for a generic agent. The `data` is authoritative for an LibreInstinct.
-When they disagree, the receiving LibreInstinct trusts `data` and tells its owner.
+The `text` is authoritative for a generic agent. The `data` is authoritative for an Open Instinct.
+When they disagree, the receiving Open Instinct trusts `data` and tells its owner.
 
 ## Intents
 

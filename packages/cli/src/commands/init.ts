@@ -3,8 +3,8 @@
  * provision the agent's identity (iMessage on), mint its keys and store them
  * under <dataDir>/secrets/inkbox.json.
  */
-import { loadConfig, saveConfig, type InstinctConfig } from "@libre-instinct/core";
-import { InkboxPlanLimitError } from "@libre-instinct/inkbox";
+import { loadConfig, saveConfig, type InstinctConfig } from "@open-instinct/core";
+import { InkboxPlanLimitError } from "@open-instinct/inkbox";
 import { parse, str, requireStr, flag, type OptionSpec } from "../args.js";
 import type { CliContext } from "../context.js";
 import { CliError } from "../io.js";
@@ -119,7 +119,7 @@ export async function runInit(ctx: CliContext, argv: string[]): Promise<number> 
     identity = await provisioner.provisionIdentity({
       handle: config.agent.handle,
       displayName: config.agent.name,
-      description: `LibreInstinct for ${config.owner.name}`,
+      description: `Open Instinct for ${config.owner.name}`,
       imessage: true,
       phone: flags.phoneNumber,
     });
@@ -132,7 +132,7 @@ export async function runInit(ctx: CliContext, argv: string[]): Promise<number> 
     config = { ...config, agent: { ...config.agent, handle: identity.handle } };
     saveConfig(state, config);
   }
-  const apiKey = await provisioner.mintIdentityKey(identity.identityId, "libre-instinct");
+  const apiKey = await provisioner.mintIdentityKey(identity.identityId, "open-instinct");
   const signingKey = await provisioner.createSigningKey(identity.handle);
   const secrets: InkboxSecrets = {
     handle: identity.handle,

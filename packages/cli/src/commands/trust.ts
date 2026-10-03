@@ -10,7 +10,7 @@ import {
   savePolicy,
   type Capability,
   type Contact,
-} from "@libre-instinct/core";
+} from "@open-instinct/core";
 import { parse, str, type OptionSpec } from "../args.js";
 import { table } from "../ansi.js";
 import type { CliContext } from "../context.js";
