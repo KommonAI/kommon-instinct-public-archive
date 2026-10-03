@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import type { ApprovalStore } from "./approvals.js";
 import type { AuditLog } from "./audit.js";
 import type { MemoryStore } from "./memory.js";
+import { checkPublicTarget, type Lookup } from "./net-guard.js";
 import { wrapUntrusted } from "./prompt.js";
 import type { Outbox } from "./runtime.js";
 import type { Scheduler } from "./scheduler.js";
@@ -20,11 +21,16 @@ export interface CoreToolDeps {
   config: InstinctConfig;
   outbox: Outbox;
   fetchImpl?: typeof fetch;
+  /** DNS lookup used to vet web_fetch targets; tests inject a stub. */
+  lookup?: Lookup;
   searchApiKey?: string;
 }
 
 const WEB_TEXT_CAP = 20_000;
+/** Bytes read from a fetched page before giving up on the rest. */
+export const WEB_BODY_CAP_BYTES = 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_REDIRECTS = 3;
 const SEARCH_RESULTS = 8;
 
 export function coreTools(deps: CoreToolDeps): RegisteredTool[] {
@@ -189,6 +195,8 @@ function ownerTools({ approvals, config, outbox, audit }: CoreToolDeps): Registe
       audit.append({ kind: "approval", conversationKey: ctx.conversationKey, principal: ctx.principal.id, detail: { token: approval.token, status: "pending", summary } });
       const who = ctx.principal.kind === "owner" ? "" : ` (from ${ctx.principal.displayName})`;
       const sent = await sendOwner(`${question}${who} Reply YES or NO. Token ${approval.token}.`, ctx);
+      // The question is now the last thing the owner heard from us, so a bare "yes" is about it.
+      if (sent) approvals.markPrompted(approval.token);
       return textResult(
         sent
           ? `Asked ${config.owner.name}. Token ${approval.token}, expires ${approval.expiresAt}. Wait for their answer.`
@@ -206,6 +214,8 @@ function ownerTools({ approvals, config, outbox, audit }: CoreToolDeps): Registe
     execute: async ({ text }, ctx) => {
       const prefix = ctx.principal.kind === "owner" ? "" : `${ctx.principal.displayName} via ${config.agent.name}: `;
       const sent = await sendOwner(`${prefix}${text}`, ctx);
+      // Something other than an approval question is now the last message; a bare "yes" would be ambiguous.
+      if (sent) approvals.clearPrompted();
       return textResult(sent ? `Sent to ${config.owner.name}.` : "The owner has no phone on file; nothing was sent.");
     },
   });
@@ -242,30 +252,101 @@ function auditTool({ audit }: CoreToolDeps): RegisteredTool {
 // Web
 // ---------------------------------------------------------------------------
 
-function webFetchTool({ fetchImpl }: CoreToolDeps): RegisteredTool {
+function webFetchTool({ fetchImpl, lookup }: CoreToolDeps): RegisteredTool {
   const doFetch = fetchImpl ?? fetch;
   return defineTool({
     name: "web_fetch",
     label: "Fetch web page",
-    description: "Fetch a public http(s) URL and return its text (HTML stripped, up to 20k characters). No logins; use the computer for pages that need one.",
+    description: "Fetch a public http(s) URL and return its text (HTML stripped, up to 20k characters). Public hosts only: no localhost, private networks or cloud metadata. No logins; use the computer for pages that need one.",
     parameters: Type.Object({ url: Type.String() }),
     meta: { capabilities: ["web.read"], group: "web", describe: (a) => `fetch ${argText(a, "url")}` },
     execute: async ({ url }, _ctx, signal) => {
-      const target = parseHttpUrl(url);
-      if (!target) return { content: [{ type: "text", text: `Only http and https URLs can be fetched: ${url}` }], isError: true };
-      const res = await doFetch(target.toString(), {
-        signal: signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        headers: { "user-agent": "open-instinct/0.1 (+https://github.com/mariagorskikh/open-instinct)", accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5" },
-        redirect: "follow",
-      });
+      const fetched = await fetchPublic(doFetch, url, { signal: signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS), ...(lookup ? { lookup } : {}) });
+      if (!fetched.ok) return { content: [{ type: "text", text: `Cannot fetch ${url}: ${fetched.reason}` }], isError: true };
+      const { res, target, hops } = fetched;
       const type = res.headers.get("content-type") ?? "";
-      const raw = await res.text();
+      const raw = await readBody(res, WEB_BODY_CAP_BYTES);
       const text = type.includes("html") ? htmlToText(raw) : raw;
       const body = clip(text.trim(), WEB_TEXT_CAP);
-      const head = `HTTP ${res.status} ${target.host}${res.url && res.url !== target.toString() ? ` (final: ${res.url})` : ""}\n`;
-      return textResult(head + wrapUntrusted(body || "(empty page)", `web page ${target.host}`));
+      const final = hops.length > 0 ? ` (final: ${hops[hops.length - 1]})` : "";
+      const head = `HTTP ${res.status} ${target.host}${final}\n`;
+      return textResult(head + wrapUntrusted(body || "(empty page)", `web page ${new URL(hops[hops.length - 1] ?? target.toString()).host}`));
     },
   });
+}
+
+interface FetchPublicOptions {
+  signal?: AbortSignal;
+  lookup?: Lookup;
+  headers?: Record<string, string>;
+}
+
+type FetchPublicResult = { ok: true; res: Response; target: URL; hops: string[] } | { ok: false; reason: string };
+
+/**
+ * Fetch a URL that must be on the public internet, following at most MAX_REDIRECTS
+ * redirects and vetting every hop with the same check, so a public page cannot bounce the
+ * agent to 127.0.0.1 or the metadata service.
+ */
+export async function fetchPublic(doFetch: typeof fetch, url: string, opts: FetchPublicOptions = {}): Promise<FetchPublicResult> {
+  const headers = opts.headers ?? {
+    "user-agent": "open-instinct/0.1 (+https://github.com/mariagorskikh/open-instinct)",
+    accept: "text/html,application/xhtml+xml,text/plain,application/json;q=0.9,*/*;q=0.5",
+  };
+  const hops: string[] = [];
+  let current = url;
+  let first: URL | undefined;
+  for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    const check = await checkPublicTarget(current, opts.lookup);
+    if (!check.ok) return { ok: false, reason: hops.length ? `redirect to ${current} refused: ${check.reason}` : check.reason };
+    const target = check.target.url;
+    first ??= target;
+    const res = await doFetch(target.toString(), { ...(opts.signal ? { signal: opts.signal } : {}), headers, redirect: "manual" });
+    const location = res.headers.get("location");
+    if (res.status >= 300 && res.status < 400 && location) {
+      let next: URL;
+      try {
+        next = new URL(location, target);
+      } catch {
+        return { ok: false, reason: `bad redirect location: ${location}` };
+      }
+      if (i === MAX_REDIRECTS) return { ok: false, reason: `too many redirects (more than ${MAX_REDIRECTS})` };
+      hops.push(next.toString());
+      current = next.toString();
+      continue;
+    }
+    return { ok: true, res, target: first, hops };
+  }
+  return { ok: false, reason: `too many redirects (more than ${MAX_REDIRECTS})` };
+}
+
+/** Read at most `cap` bytes of a response body as UTF-8 text. */
+async function readBody(res: Response, cap: number): Promise<string> {
+  const body = res.body;
+  if (!body) return await res.text();
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < cap) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      const room = cap - total;
+      const slice = value.byteLength > room ? value.subarray(0, room) : value;
+      chunks.push(slice);
+      total += slice.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    joined.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(joined);
 }
 
 interface SearchHit {
@@ -375,15 +456,6 @@ function decodeEntities(text: string): string {
 
 function safeChar(code: number): string {
   return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : "";
-}
-
-function parseHttpUrl(raw: string): URL | undefined {
-  try {
-    const u = new URL(raw.trim());
-    return u.protocol === "http:" || u.protocol === "https:" ? u : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function clip(text: string, max: number): string {

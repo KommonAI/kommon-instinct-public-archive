@@ -88,7 +88,7 @@ describe("wrapMcpTool", () => {
     const tool = wrapMcpTool(stubSource([t]), t);
     expect(tool.spec.description).toContain("Run tools");
     expect(tool.spec.description).toContain("cannot check them one by one");
-    expect(tool.spec.meta.capabilities).toEqual(["apps.use"]);
+    expect(tool.spec.meta.capabilities).toEqual(["apps.use", "trust.manage"]);
   });
 
   it("calls the MCP tool by its original slug and converts the result", async () => {

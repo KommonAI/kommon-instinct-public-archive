@@ -75,10 +75,8 @@ interface ReplyContext {
   subject?: string;
   messageId?: string;
   mailbox?: string;
+  taskId?: string;
 }
-
-/** Fields the runtime may attach beyond the typed OutboundMessage. */
-type OutboundWithRef = OutboundMessage & { replyRef?: Record<string, string | undefined> };
 
 function toList(to: string | string[] | undefined): string[] {
   if (!to) return [];
@@ -118,13 +116,17 @@ export class InkboxChannel implements Outbox {
     return this.identityPromise;
   }
 
-  /** Record who to answer in a thread. The server calls this for each inbound message. */
+  /**
+   * Record who to answer in a thread, for outbounds that arrive without a replyRef
+   * (send_message with no `to`, for example). Hosts call this per inbound message.
+   */
   remember(msg: InboundMessage): void {
     if (msg.channel !== "email" && msg.channel !== "a2a") return;
     const ctx: ReplyContext = { from: msg.from };
     if (msg.replyRef.subject) ctx.subject = msg.replyRef.subject;
     if (msg.replyRef.messageId) ctx.messageId = msg.replyRef.messageId;
     if (msg.replyRef.mailbox) ctx.mailbox = msg.replyRef.mailbox;
+    if (msg.replyRef.taskId) ctx.taskId = msg.replyRef.taskId;
     this.replyContexts.set(msg.conversationKey, ctx);
   }
 
@@ -137,7 +139,7 @@ export class InkboxChannel implements Outbox {
       case "sms":
         return this.sendSms(msg, key);
       case "email":
-        return this.sendEmail(msg as OutboundWithRef, key);
+        return this.sendEmail(msg, key);
       case "a2a":
         return this.sendA2A(msg, key);
       default:
@@ -186,13 +188,15 @@ export class InkboxChannel implements Outbox {
     }
   }
 
-  private async sendEmail(msg: OutboundWithRef, key: ParsedKey): Promise<void> {
+  private async sendEmail(msg: OutboundMessage, key: ParsedKey): Promise<void> {
     const identity = await this.identity();
     const remembered = msg.conversationKey ? this.replyContexts.get(msg.conversationKey) : undefined;
     const ref = msg.replyRef ?? {};
+    // Recipient: explicit `to`, else the sender of the inbound we are answering, else what remember() saw.
     let to = toList(msg.to);
+    if (to.length === 0) to = toList(ref.to ?? ref.from);
     if (to.length === 0 && remembered) to = [remembered.from];
-    if (to.length === 0) throw new Error(`email send needs a recipient: no \`to\` and no remembered sender for ${msg.conversationKey ?? "a new thread"}`);
+    if (to.length === 0) throw new Error(`email send needs a recipient: no \`to\`, no replyRef.from and no remembered sender for ${msg.conversationKey ?? "a new thread"}`);
     const inThread = key.channel === "email" && key.id.length > 0;
     const subjectHint = ref.subject ?? remembered?.subject;
     const subject = inThread ? replySubject(subjectHint) : (subjectHint ?? "Message from your Instinct");
@@ -203,13 +207,17 @@ export class InkboxChannel implements Outbox {
   }
 
   private async sendA2A(msg: OutboundMessage, key: ParsedKey): Promise<void> {
-    if (!msg.a2a) throw new Error(`A2A send on ${msg.conversationKey ?? key.id} needs msg.a2a { taskId, intent }`);
+    const remembered = msg.conversationKey ? this.replyContexts.get(msg.conversationKey) : undefined;
+    // Task id: msg.a2a, else the inbound replyRef, else what remember() saw. Intent defaults to complete.
+    const taskId = msg.a2a?.taskId ?? msg.replyRef?.taskId ?? remembered?.taskId;
+    if (!taskId) throw new Error(`A2A send on ${msg.conversationKey ?? key.id} needs msg.a2a { taskId, intent } or a replyRef.taskId`);
+    const intent = msg.a2a?.intent ?? "complete";
     const identity = await this.identity();
     const parts: Record<string, unknown>[] = [];
     if (msg.text) parts.push({ text: msg.text });
-    if (msg.a2a.data) parts.push({ data: msg.a2a.data });
+    if (msg.a2a?.data) parts.push({ data: msg.a2a.data });
     if (parts.length === 0) parts.push({ text: "" });
-    await identity.a2aReply(msg.a2a.taskId, { intent: msg.a2a.intent, parts });
+    await identity.a2aReply(taskId, { intent, parts });
   }
 
   /** Typing indicators exist only on one-to-one iMessage threads; elsewhere this is a no-op. */

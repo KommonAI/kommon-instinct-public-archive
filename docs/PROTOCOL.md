@@ -4,17 +4,27 @@ Open Instinct Protocol version 1 is a thin layer on top of A2A 1.0 as hosted by 
 text carries the request so any A2A agent can read it. A structured `data` part carries a typed
 intent so two Open Instincts can be precise.
 
+Analogy: the text part is the voicemail anyone can understand. The data part is the form attached
+to it, filled in the same way every time, so the other agent can act without guessing.
+
 ## Transport
 
-- Endpoint: `POST https://inkbox.ai/a2a/{handle}` (JSON-RPC 2.0, headers `X-API-Key` (identity-scoped),
-  `A2A-Version: 1.0`).
+- Endpoint: `POST https://inkbox.ai/a2a/{handle}` (JSON-RPC 2.0 `SendMessage`, headers `X-API-Key`
+  (identity-scoped) and `A2A-Version: 1.0`).
 - Discovery: `GET https://inkbox.ai/a2a/{handle}/card`.
-- Our agent as **worker**: Inkbox stores the task, posts `a2a.task.created` and `a2a.task.message`
-  webhooks; we answer with `POST /api/v1/identities/{handle}/a2a/tasks/{task_id}/reply`
-  `{ intent: "progress" | "complete" | "ask_caller" | "fail", parts: [...] }`.
-- Our agent as **caller**: `identity.a2aClient()` → `fetchCard(url)` → `send(card, { text, data?, contextId? })`;
-  progress arrives as `a2a.sent_task.updated` webhooks or by polling `a2aSentTask(id)`.
-- One A2A **context** per topic (a dinner, a trip). Tasks inside it are turns.
+- Our agent as **worker**: Inkbox stores the task and posts `a2a.task.created` (then `a2a.task.message`
+  for follow-ups) to our webhook. We answer with
+  `POST /api/v1/identities/{handle}/a2a/tasks/{task_id}/reply` and a body
+  `{ intent: "progress" | "complete" | "ask_caller" | "fail", parts: [...] }`. In code this is
+  `InkboxA2A.reply`, called by the `reply_instinct` tool. When the model answers in plain words without
+  calling the tool, the runtime sends its final text as `complete`, or as `progress` when an owner
+  approval is still pending in that conversation.
+- Our agent as **caller**: `InkboxA2A.send(peer, text, data, { contextId? })` posts `SendMessage` and
+  returns `{ taskId, contextId, state }`. This is what the `ask_instinct` tool does. The peer's
+  progress and answer arrive later as `a2a.sent_task.updated` webhooks, which become new messages in
+  the same conversation.
+- One A2A **context** per topic (a dinner, a trip). Tasks inside it are turns. Our conversation key
+  is `a2a:<context_id>`.
 
 ## Admission
 
@@ -25,8 +35,8 @@ Two gates, both must pass:
 2. Our tiers: the caller handle maps to a contact; the contact's tier decides what the request may do.
    Unknown callers are `stranger`.
 
-Invitations (`POST /api/v1/a2a/invitations`) set up gate 1 for both sides at once; accepting an Open
-Instinct invitation also sets the tier the inviter chose for gate 2.
+Invitations (`invite_to_network`, or `instinct invite ... --handle <peer>`) set up gate 1 for both
+sides at once; accepting an Open Instinct invitation also sets the tier the inviter chose for gate 2.
 
 ## Message shape
 
@@ -54,7 +64,10 @@ Every A2A message has two parts:
 ```
 
 The `text` is authoritative for a generic agent. The `data` is authoritative for an Open Instinct.
-When they disagree, the receiving Open Instinct trusts `data` and tells its owner.
+When they disagree, the receiving Open Instinct trusts `data` and tells its owner. `on_behalf_of.display`
+names the human whose request this is. When a partner, family member or friend relays a request
+through someone else's Instinct, it names them, never that Instinct's owner, and the text starts with
+"From <name>, relayed by <owner>'s Instinct (not <owner>'s request)".
 
 ## Intents
 
@@ -71,12 +84,37 @@ When they disagree, the receiving Open Instinct trusts `data` and tells its owne
 | `book_request` | `vendor`, `details`, `budget_usd?` | `confirm` or `decline` (owner approval on the worker side) |
 
 Workers never return more than the caller's tier allows. `request_freebusy` from a `friend` returns busy
-blocks only; from a `stranger` it is declined.
+blocks only; from a `stranger` it is declined. Proposals carry at most three options.
+
+## Group plans
+
+A plan with several people is several two-party conversations, not one group call. `ask_instinct`
+with `contacts: ["Sam", "Priya"]` sends the same intent and payload to each person:
+
+- Each Instinct gets its own task in its own context. Its answer arrives as a separate
+  `a2a:<context_id>` conversation on the caller's side. The caller's model combines the answers
+  for its owner ("Sam can do Thu, Priya can do Thu or Fri; Thu it is?").
+- A person without an Instinct gets the same request as a text or email, rendered by `oipToText`.
+  Only the owner may use that fallback.
+- `contextId` continues one peer's topic and is refused with several contacts. Once the group has
+  settled on a slot, the caller sends `confirm` to each peer in that peer's own context.
+
+Every recipient's agent applies its own owner's tiers to the request. The caller never learns more
+from one peer because another peer trusts it more.
+
+## Declines are reported
+
+A worker that cannot honour a request answers politely and tells its own owner. The policy engine
+does this on its own: a denied request from another agent produces a refusal for the caller and one
+text to the owner per conversation per hour ("Sam's agent (@sam-instinct) asked to read your
+calendar; I declined."). The network guidance adds the model-level rule: an out-of-scope request from
+another agent is declined with `fail` and reported, never carried out. See
+[PERMISSIONS.md](PERMISSIONS.md#enforced-twice-decline-and-tell-the-owner).
 
 ## Consent and audit
 
-- A worker that needs its owner's say-so answers with A2A `ask_caller`? No: it answers `progress`
-  ("checking with Sam") and completes later, so the caller's context stays open.
+- A worker that needs its owner's say-so does not block the caller. It answers `progress` ("checking
+  with Sam") and completes later, so the caller's context stays open.
 - Both agents append the exchange to their audit logs and journals; owners can ask "what did you agree
   with Sam's Instinct?".
 
@@ -84,3 +122,9 @@ blocks only; from a `stranger` it is declined.
 
 The same intents degrade to text. `propose_times` becomes a friendly iMessage listing the options;
 the reply is parsed by the model and written back as an `accept` or `decline` in the local thread.
+
+## Try it without Inkbox
+
+`node examples/dinner-a2a.mjs` boots two real agents with Pi's faux model and a fake `fetch` in place
+of Inkbox, and walks a dinner from `propose_times` to `confirm` in one shared context. See
+[examples/README.md](../examples/README.md).

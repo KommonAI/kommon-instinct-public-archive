@@ -31,7 +31,9 @@ Node 22.19 or newer is required.
 | `MARITIME_API_KEY` | `deploy`, `chat --agent` | `mk_...` key with the `provision` and `deploy` scopes |
 | `MARITIME_API_URL`, `MARITIME_APP_URL` | `deploy`, `chat` | control plane and dashboard base URLs (defaults: api.maritime.sh, maritime.sh) |
 | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` + `OPENAI_BASE_URL` | `dev`, `deploy` | model access, copied into the Maritime agent on deploy |
-| `COMPOSIO_API_KEY`, `COMPOSIO_TOOLKITS` | `dev`, `deploy` | Gmail, Calendar and other apps through Composio |
+| `INSTINCT_MARITIME_MODEL` | `deploy --maritime-llm` | model id behind Maritime's metered proxy (default `gpt-5.4`) |
+| `COMPOSIO_API_KEY`, `COMPOSIO_TOOLKITS` | `init`, `dev`, `deploy` | Gmail, Calendar and other apps through Composio. `init` turns `apps.enabled` on when either is set; `dev` warns when the key is set but apps are off |
+| `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET`, `LINK_REDIRECT_URI`, `STRIPE_PUBLISHABLE_KEY` | `deploy`, `payments` | Stripe Link Agent Wallet. `deploy` copies them into the agent when `LINK_CLIENT_ID` is set; `payments connect` uses them to build the authorize URL when no server offers one |
 | `BRAVE_SEARCH_API_KEY` | `dev`, `deploy` | optional web search key |
 | `NO_COLOR` | all | disables ANSI colors |
 | `INSTINCT_DEBUG` | all | prints stack traces on unexpected errors |
@@ -55,21 +57,28 @@ the connect instructions.
 instinct init --name <you> [--phone +1...] [--email you@x.com] [--handle <handle>]
               [--model provider/model-id] [--timezone Area/City] [--city "..."]
               [--agent-name "..."] [--phone-number] [--skip-inkbox]
+              [--apps | --no-apps] [--toolkits gmail,googlecalendar]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--name` | your name (required) |
 | `--phone`, `--email` | how the agent recognises you as the owner; repeat `init` to add more |
-| `--handle` | the agent's Inkbox handle, for example `maria-instinct`; required to provision |
+| `--handle` | the agent's Inkbox handle, for example `maria-instinct`; required to provision. `owner` is reserved |
 | `--model` | `provider/model-id`, default `anthropic/claude-fable-5-1` |
 | `--timezone`, `--city` | owner profile fields used in prompts and schedules |
 | `--agent-name` | display name of the agent (default from core, for example "Maria's Instinct") |
 | `--phone-number` | also buy an SMS line for the identity (off by default; iMessage works without it) |
 | `--skip-inkbox` | write config only, even when an admin key is present |
+| `--apps`, `--no-apps` | turn Composio apps (`apps.enabled`) on or off. Apps also turn on by themselves when `COMPOSIO_API_KEY` or `COMPOSIO_TOOLKITS` is in the environment |
+| `--toolkits` | comma-separated Composio toolkit slugs (default `gmail,googlecalendar,googlecontacts`); setting them turns apps on |
 
 Running `init` again updates the existing config instead of replacing it. If the handle is
 already taken, Inkbox assigns a suffixed one and `init` saves that handle in the config.
+
+`config.json` wins over the environment after the first boot, so exporting `COMPOSIO_API_KEY`
+later does nothing on its own. Run `init` again (with `--apps` or the key in env) to flip
+`apps.enabled`; `dev` prints a warning naming that fix when it sees the key with apps off.
 
 ### `instinct connect`
 
@@ -90,7 +99,11 @@ instinct dev [--port 8080] [--host 0.0.0.0] [--tunnel] [--quiet]
 `--tunnel` sets `INSTINCT_TUNNEL=1`, opens an Inkbox tunnel to this process and, with
 `INKBOX_ADMIN_API_KEY`, subscribes the webhook to `<publicUrl>/webhooks/inkbox`. Without an
 admin key it prints the URL for you to subscribe by hand. Ctrl-C closes the tunnel, the
-server and the agent cleanly.
+server and the agent cleanly. `--data-dir` may come before or after `dev`; the binary stays
+up either way.
+
+If `COMPOSIO_API_KEY` is set but `config.json` has `apps.enabled: false`, `dev` warns and
+names the fix (`instinct init --name <you> --apps`) instead of booting without app tools.
 
 ### `instinct chat`
 
@@ -117,12 +130,15 @@ name, owner, model, computer kind, connected apps, conversation counts, uptime.
 
 Creates one Maritime agent for you from a built image. The request body is the same one
 the gateway uses for multi-user signups, so both shapes produce the same kind of agent:
-`framework: "custom"`, `exposedPort: 8080`, `healthCheckPath: "/health"`, `desktop: true`,
-`externalId: "open-instinct:<handle>"`.
+`framework: "custom"`, `exposedPort: 18789`, `healthCheckPath: "/health"`, `desktop: true`,
+`externalId: "open-instinct:<handle>"`. Maritime injects `PORT=18789` for custom images; the
+body sends the same number as `exposedPort` and as an explicit `PORT` env var so the port the
+server binds and the port Maritime forwards to are always the same. Local runs
+(`deploy/Dockerfile.agent`, `docker compose`) keep `PORT=8080`.
 
 ```
 instinct deploy --image ghcr.io/<you>/open-instinct-agent:<tag> [--name instinct-<handle>]
-                [--idle 900] [--no-desktop] [--dry-run]
+                [--idle 900] [--no-desktop] [--maritime-llm] [--model <id>] [--dry-run]
 ```
 
 | Flag | Meaning |
@@ -131,14 +147,18 @@ instinct deploy --image ghcr.io/<you>/open-instinct-agent:<tag> [--name instinct
 | `--name` | Maritime agent name, default `instinct-<handle>` |
 | `--idle` | seconds of silence before the microVM sleeps, default 900 |
 | `--no-desktop` | skip the Linux desktop (no computer use, cheaper) |
+| `--maritime-llm` | no model key of your own: sets `useMaritimeLlm: true` so Maritime injects `OPENAI_API_KEY` and `OPENAI_BASE_URL` for its metered proxy, and sets `INSTINCT_MODEL=openai-compatible/<model>` so the agent uses them. Your own `OPENAI_*` are not copied in this mode |
+| `--model` | with `--maritime-llm`, the proxy model id (default `gpt-5.4`, or `INSTINCT_MARITIME_MODEL`); otherwise overrides `config.model.primary` for this agent |
 | `--dry-run` | print the body with secrets redacted, create nothing |
 
-Env vars copied into the agent: `INSTINCT_*` owner and model settings, `INKBOX_*` from
-`secrets/inkbox.json`, `ANTHROPIC_API_KEY` or `OPENAI_*`, `COMPOSIO_*`, `BRAVE_SEARCH_API_KEY`.
-Secrets are flagged `isSecret: true` so Maritime encrypts them. The new agent id is saved to
-`<dataDir>/maritime.json` and the command prints the dashboard URL plus the two ways to
-receive webhooks: run the gateway, or self-host with `instinct dev --tunnel`. Creating an
-agent debits your Maritime wallet; a 402 is shown with the server's own explanation.
+Env vars copied into the agent: `PORT`, `INSTINCT_*` owner and model settings, `INKBOX_*` from
+`secrets/inkbox.json`, `ANTHROPIC_API_KEY` or `OPENAI_*`, `COMPOSIO_*`, `BRAVE_SEARCH_API_KEY`,
+and, when `LINK_CLIENT_ID` is set, `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET`, `LINK_REDIRECT_URI`
+and `STRIPE_PUBLISHABLE_KEY` for Stripe Link payments. Secrets are flagged `isSecret: true` so
+Maritime encrypts them. The new agent id is saved to `<dataDir>/maritime.json` and the command
+prints the dashboard URL plus the two ways to receive webhooks: run the gateway, or self-host
+with `instinct dev --tunnel`. Creating an agent debits your Maritime wallet; a 402 is shown
+with the server's own explanation.
 
 ### `instinct invite`
 
@@ -168,6 +188,25 @@ not exist. `grant` writes a scoped, time-boxed exception to `policy.json`; `--un
 date means end of that day (UTC). Capabilities are the strings from
 `docs/PERMISSIONS.md`, for example `calendar.write,plans.commit`. Nobody can be set to
 `owner`.
+
+### `instinct payments`
+
+```
+instinct payments connect [--url http://127.0.0.1:8080]
+instinct payments status  [--url http://127.0.0.1:8080]
+```
+
+`connect` prints the Stripe Link authorize URL that links your Link wallet to the agent.
+It asks the running server for `GET /oauth/link/start` first (the server holds the PKCE
+verifier and finishes the token exchange when Link redirects back). When the server has no
+such route, the URL is built from `LINK_CLIENT_ID` and `LINK_REDIRECT_URI`
+(`https://login.link.com/auth`, scope `payment_methods.agentic`) with a warning that the
+exchange still needs a server. Behind the gateway, the redirect lands on
+`<gateway>/oauth/link/callback/<userId>` and the gateway relays the code to your agent.
+
+`status` prints what the server reports on `GET /payments/status` (or the `payments` field
+of `GET /`) and whether `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET`, `LINK_REDIRECT_URI` and
+`STRIPE_PUBLISHABLE_KEY` are set locally. Values are never printed, only `set` or `missing`.
 
 ### `instinct schedules`
 

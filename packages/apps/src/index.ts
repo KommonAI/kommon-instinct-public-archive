@@ -1,4 +1,4 @@
-export { capabilitiesForSlug, toolkitOfSlug, COMPOSIO_META_TOOLS } from "./capabilities.js";
+export { capabilitiesForSlug, toolkitOfSlug, APPS_MANAGE, CONTACTS_WRITE, CONTACTS_WRITE_PREFIXES, COMPOSIO_META_TOOLS } from "./capabilities.js";
 export {
   ComposioApps,
   APPS_STATE_FILE,

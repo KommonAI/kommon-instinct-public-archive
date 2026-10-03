@@ -20,10 +20,18 @@ export const HELP_GROUPS: HelpGroup[] = [
     entries: [
       {
         name: "init",
-        usage: "init --name <you> [--phone +1...] [--email ...] [--handle <handle>] [--model provider/id]",
+        usage: "init --name <you> [--phone +1...] [--email ...] [--handle <handle>] [--model provider/id] [--apps] [--toolkits a,b]",
         summary: "Write config.json and, with INKBOX_ADMIN_API_KEY, provision the agent's iMessage identity.",
         example: 'instinct init --name "Maria" --phone +14155550100 --email maria@example.com --handle maria-instinct',
-        flags: ["--timezone America/New_York", "--city \"San Francisco\"", "--agent-name \"Maria's Instinct\"", "--phone-number (also buy an SMS line)", "--skip-inkbox"],
+        flags: [
+          "--timezone America/New_York",
+          "--city \"San Francisco\"",
+          "--agent-name \"Maria's Instinct\"",
+          "--phone-number (also buy an SMS line)",
+          "--skip-inkbox",
+          "--apps / --no-apps (Composio apps; on by itself when COMPOSIO_API_KEY or COMPOSIO_TOOLKITS is in env)",
+          "--toolkits gmail,googlecalendar,googlecontacts (also turns apps on)",
+        ],
       },
       {
         name: "connect",
@@ -61,9 +69,26 @@ export const HELP_GROUPS: HelpGroup[] = [
     entries: [
       {
         name: "deploy",
-        usage: "deploy --image ghcr.io/<you>/open-instinct-agent:<tag> [--name instinct-<handle>] [--idle 900] [--no-desktop] [--dry-run]",
+        usage: "deploy --image ghcr.io/<you>/open-instinct-agent:<tag> [--name instinct-<handle>] [--idle 900] [--no-desktop] [--maritime-llm] [--model <id>] [--dry-run]",
         summary: "Create the Maritime agent (own microVM with a desktop) from a built image. Needs MARITIME_API_KEY.",
         example: "instinct deploy --image ghcr.io/maria/open-instinct-agent:latest",
+        flags: [
+          "--maritime-llm (no model key of your own: Maritime injects its metered OpenAI-compatible proxy; INSTINCT_MODEL becomes openai-compatible/<model>)",
+          "--model <id> (proxy model with --maritime-llm, default gpt-5.4 or INSTINCT_MARITIME_MODEL; otherwise overrides config.model.primary)",
+          "LINK_CLIENT_ID, LINK_CLIENT_SECRET, LINK_REDIRECT_URI, STRIPE_PUBLISHABLE_KEY in env are copied into the agent when LINK_CLIENT_ID is set",
+        ],
+      },
+    ],
+  },
+  {
+    title: "Payments",
+    entries: [
+      {
+        name: "payments",
+        usage: "payments connect | status [--url http://127.0.0.1:8080]",
+        summary: "Link the owner's Stripe Link wallet to the agent (prints the authorize URL) and show what is connected.",
+        example: "instinct payments connect",
+        flags: ["connect: asks the running server for GET /oauth/link/start, else builds the URL from LINK_CLIENT_ID and LINK_REDIRECT_URI", "status: GET /payments/status plus the local LINK_* configuration"],
       },
     ],
   },
@@ -130,6 +155,6 @@ export function renderHelp(c: Palette, command?: string): string {
   }
   lines.push("Global: --data-dir <dir> (default $INSTINCT_DATA_DIR or ./.instinct), --help, --version");
   lines.push("");
-  lines.push("Env: INSTINCT_DATA_DIR, INKBOX_ADMIN_API_KEY, MARITIME_API_KEY, ANTHROPIC_API_KEY, COMPOSIO_API_KEY");
+  lines.push("Env: INSTINCT_DATA_DIR, INKBOX_ADMIN_API_KEY, MARITIME_API_KEY, ANTHROPIC_API_KEY, COMPOSIO_API_KEY, COMPOSIO_TOOLKITS, LINK_CLIENT_ID");
   return lines.join("\n");
 }

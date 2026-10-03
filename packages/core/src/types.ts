@@ -30,6 +30,11 @@ export interface Principal {
   contactId?: string;
   /** For `agent` principals: the human the agent acts for, when known. */
   onBehalfOf?: { displayName: string; contactId?: string };
+  /**
+   * Set when a higher-trust principal speaks in a shared thread (an iMessage group) and
+   * therefore acts at a lower tier than its own, because every reply is visible to all.
+   */
+  cappedFrom?: Tier;
 }
 
 /** Capability strings. The table of defaults lives in policy.ts. */
@@ -161,6 +166,11 @@ export interface OutboundMessage {
   sendStyle?: string;
   /** For A2A replies. */
   a2a?: { taskId: string; intent: "progress" | "complete" | "ask_caller" | "fail"; data?: Record<string, unknown> };
+  /**
+   * The inbound message's replyRef, copied by the runtime so a channel adapter can thread
+   * an email reply (Message-ID, subject, mailbox) or address an A2A task (taskId, contextId).
+   */
+  replyRef?: Record<string, string | undefined>;
 }
 
 /** The envelope the gateway wraps Inkbox events in when relaying through Maritime /chat. */
@@ -243,6 +253,10 @@ export interface Approval {
   summary: string;
   capability: Capability;
   amountUsd?: number;
+  /** The tool the approval was raised for, when the policy guard raised it. */
+  toolName?: string;
+  /** Stable hash of the normalized tool arguments, so an approval covers one exact call. */
+  argsHash?: string;
   createdAt: string;
   expiresAt: string;
   status: "pending" | "approved" | "denied" | "expired";

@@ -146,6 +146,18 @@ describe("parseInkboxEvent: text.received", () => {
   it("returns undefined without a remote number", () => {
     expect(parseInkboxEvent(envelope("text.received", { text_message: { id: "t", text: "x" } }))).toBeUndefined();
   });
+
+  it("uses sender_phone_number when remote_phone_number is null and keeps media", () => {
+    const m = parseInkboxEvent(
+      envelope("text.received", {
+        text_message: { id: "t_3", remote_phone_number: null, sender_phone_number: "+14155550102", text: null, media: [{ url: "https://cdn/x.jpg", content_type: "image/jpeg" }], conversation_id: "tc_3" },
+      }),
+    )!;
+    expect(m.from).toBe("+14155550102");
+    expect(m.text).toBe("[attachment]");
+    expect(m.attachments).toEqual([{ url: "https://cdn/x.jpg", mimeType: "image/jpeg" }]);
+    expect(m.replyRef.conversationId).toBe("tc_3");
+  });
 });
 
 describe("parseInkboxEvent: message.received (mail)", () => {
@@ -176,6 +188,7 @@ describe("parseInkboxEvent: message.received (mail)", () => {
     expect(m.from).toBe("sam@example.com");
     expect(m.text).toBe("Subject: Dinner next week\n\nHi, are you free Thursday?\n\nSam");
     expect(m.replyRef).toMatchObject({
+      from: "sam@example.com",
       messageId: "<abc@mail.example>",
       inkboxMessageId: "mail_1",
       threadId: "th_1",
@@ -231,9 +244,79 @@ describe("parseInkboxEvent: A2A", () => {
     expect(m.data).toBeUndefined();
   });
 
-  it("ignores canceled and sent_task.updated events", () => {
-    expect(parseInkboxEvent(envelope("a2a.task.canceled", data))).toBeUndefined();
-    expect(parseInkboxEvent(envelope("a2a.sent_task.updated", data))).toBeUndefined();
+  it("marks received tasks with direction received and reads the caller", () => {
+    const m = parseInkboxEvent(envelope("a2a.task.created", data))!;
+    expect(m.meta).toMatchObject({ direction: "received", callerOrganizationId: "org_9" });
+  });
+
+  it("turns a2a.task.canceled into a system-style line in the same conversation", () => {
+    const m = parseInkboxEvent(envelope("a2a.task.canceled", { ...data, state: "canceled", message_id: undefined, parts: [] }, "evt_c"))!;
+    expect(m.channel).toBe("a2a");
+    expect(m.conversationKey).toBe("a2a:ctx_1");
+    expect(m.from).toBe("sam-instinct");
+    expect(m.text).toBe("[task task_1 canceled by @sam-instinct]");
+    expect(m.replyRef).toEqual({ taskId: "task_1", contextId: "ctx_1", messageId: undefined });
+    expect(m.meta).toMatchObject({ eventType: "a2a.task.canceled", state: "canceled", direction: "received" });
+    expect(m.data).toBeUndefined();
+  });
+
+  it("appends the caller's note to a cancel and defaults the state when missing", () => {
+    const m = parseInkboxEvent(envelope("a2a.task.canceled", { task_id: "t", context_id: "c", caller: {}, parts: [{ text: "never mind" }] }))!;
+    expect(m.text).toBe("[task t canceled by the caller]\n\nnever mind");
+    expect(m.meta?.state).toBe("canceled");
+    expect(m.from).toBe("");
+  });
+
+  describe("a2a.sent_task.updated", () => {
+    // On this event `caller` is our own identity; the peer who answered rides on `sender`.
+    const sent = {
+      task_id: "task_7",
+      context_id: "ctx_7",
+      state: "completed",
+      caller: { handle: "maria-instinct", identity_id: "id_me", organization_id: "org_me" },
+      sender: { handle: "sam-instinct", identity_id: "id_9", organization_id: "org_9" },
+      message_id: "m_9",
+      parts: [{ text: "Thu 7pm works for Sam." }, { data: { oip: "1", intent: "accept", payload: { slot: { start: "2026-10-08T19:00:00-07:00" } } } }],
+    };
+
+    it("maps the peer's answer to a message from the sender with text, data and replyRef", () => {
+      const m = parseInkboxEvent(envelope("a2a.sent_task.updated", sent, "evt_s"))!;
+      expect(m.channel).toBe("a2a");
+      expect(m.id).toBe("evt_s");
+      expect(m.conversationKey).toBe("a2a:ctx_7");
+      expect(m.from).toBe("sam-instinct");
+      expect(m.from).not.toBe("maria-instinct");
+      expect(m.text).toBe("Thu 7pm works for Sam.");
+      expect(m.data).toEqual({ oip: "1", intent: "accept", payload: { slot: { start: "2026-10-08T19:00:00-07:00" } } });
+      expect(m.replyRef).toEqual({ taskId: "task_7", contextId: "ctx_7", messageId: "m_9" });
+      expect(m.meta).toMatchObject({ eventType: "a2a.sent_task.updated", state: "completed", direction: "sent", callerIdentityId: "id_9", callerOrganizationId: "org_9" });
+    });
+
+    it("still prompts on a bare state change and keeps successive updates apart", () => {
+      const { message_id: _m, parts: _p, ...bare } = sent;
+      const working = parseInkboxEvent({ event_type: "a2a.sent_task.updated", data: { ...bare, state: "working" } })!;
+      const done = parseInkboxEvent({ event_type: "a2a.sent_task.updated", data: { ...bare, state: "completed" } })!;
+      expect(working.text).toBe("[working]");
+      expect(done.text).toBe("[completed]");
+      expect(working.id).toBe("a2a:task_7:working");
+      expect(done.id).toBe("a2a:task_7:completed");
+      expect(working.data).toBeUndefined();
+    });
+
+    it("falls back to the task id as context and reads other peer field names", () => {
+      const noCtx = parseInkboxEvent(envelope("a2a.sent_task.updated", { task_id: "task_8", state: "working", caller: { handle: "maria-instinct" }, worker: { handle: "alex-instinct" }, parts: [{ text: "on it" }] }))!;
+      expect(noCtx.conversationKey).toBe("a2a:task_8");
+      expect(noCtx.replyRef).toMatchObject({ taskId: "task_8", contextId: "task_8" });
+      expect(noCtx.from).toBe("alex-instinct");
+      const unknownPeer = parseInkboxEvent(envelope("a2a.sent_task.updated", { task_id: "task_9", context_id: "c9", state: "working", caller: { handle: "maria-instinct" } }))!;
+      // Never present our own identity as the sender.
+      expect(unknownPeer.from).toBe("");
+      expect(unknownPeer.text).toBe("[working]");
+    });
+
+    it("drops an update without a task id", () => {
+      expect(parseInkboxEvent(envelope("a2a.sent_task.updated", { context_id: "c", state: "working" }))).toBeUndefined();
+    });
   });
 
   it("tolerates a missing caller handle and missing parts", () => {

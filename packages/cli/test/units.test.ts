@@ -4,6 +4,11 @@ import { describe, expect, it } from "vitest";
 import { extractDataDir } from "../src/args.js";
 import { table } from "../src/ansi.js";
 import { decodeDataUrl } from "../src/commands/connect.js";
+import { modelSpecFor } from "../src/commands/deploy.js";
+import { appsWarning } from "../src/commands/dev.js";
+import { applyInitFlags, parseInitFlags, splitToolkits } from "../src/commands/init.js";
+import { buildAuthorizeUrl } from "../src/commands/payments.js";
+import { defaultConfig } from "@open-instinct/core";
 import { flattenStatus } from "../src/commands/status.js";
 import { parseUntil, parseCapabilities } from "../src/commands/trust.js";
 import { validateCron } from "../src/commands/schedules.js";
@@ -16,6 +21,9 @@ describe("extractDataDir", () => {
     expect(extractDataDir(["trust", "list", "--data-dir", "/x"])).toEqual({ argv: ["trust", "list"], dataDir: "/x" });
     expect(extractDataDir(["--data-dir=/y", "init"])).toEqual({ argv: ["init"], dataDir: "/y" });
     expect(extractDataDir(["init"])).toEqual({ argv: ["init"], dataDir: undefined });
+    // The command word is the first remaining argument, not argv[0]; bin.ts relies on this for `dev`.
+    expect(extractDataDir(["--data-dir", "x", "dev"]).argv[0]).toBe("dev");
+    expect(extractDataDir(["--data-dir=x", "dev", "--tunnel"]).argv).toEqual(["dev", "--tunnel"]);
   });
   it("fails when the flag has no value", () => {
     expect(() => extractDataDir(["init", "--data-dir"])).toThrow(/needs a path/);
@@ -90,6 +98,60 @@ describe("decodeDataUrl", () => {
   });
   it("returns undefined for non data URLs", () => {
     expect(decodeDataUrl("https://example.com/qr.png")).toBeUndefined();
+  });
+});
+
+describe("init flags", () => {
+  it("splitToolkits lowercases, trims and drops empties", () => {
+    expect(splitToolkits("Gmail, GoogleCalendar;slack")).toEqual(["gmail", "googlecalendar", "slack"]);
+    expect(splitToolkits(" , ")).toBeUndefined();
+    expect(splitToolkits(undefined)).toBeUndefined();
+  });
+  it("derives apps from flags first, then env, and applies them on top of an existing config", () => {
+    expect(parseInitFlags(["--name", "M"]).apps).toBeUndefined();
+    expect(parseInitFlags(["--name", "M"], { COMPOSIO_API_KEY: "k" })).toMatchObject({ apps: true, toolkits: undefined });
+    expect(parseInitFlags(["--name", "M"], { COMPOSIO_TOOLKITS: "gmail" })).toMatchObject({ apps: true, toolkits: ["gmail"] });
+    expect(parseInitFlags(["--name", "M", "--toolkits", "slack"], { COMPOSIO_TOOLKITS: "gmail" }).toolkits).toEqual(["slack"]);
+    expect(parseInitFlags(["--name", "M", "--no-apps"], { COMPOSIO_API_KEY: "k", COMPOSIO_TOOLKITS: "gmail" })).toMatchObject({ apps: false, toolkits: undefined });
+    expect(() => parseInitFlags(["--name", "M", "--apps", "--no-apps"])).toThrow(/cannot both/);
+
+    const base = defaultConfig();
+    const on = applyInitFlags(base, { name: "M", phoneNumber: false, skipInkbox: false, apps: true, toolkits: ["slack"] });
+    expect(on.apps).toEqual({ enabled: true, toolkits: ["slack"] });
+    const untouched = applyInitFlags(on, { name: "M", phoneNumber: false, skipInkbox: false });
+    expect(untouched.apps).toEqual({ enabled: true, toolkits: ["slack"] });
+    expect(applyInitFlags(on, { name: "M", phoneNumber: false, skipInkbox: false, apps: false }).apps).toEqual({ enabled: false, toolkits: ["slack"] });
+  });
+});
+
+describe("appsWarning", () => {
+  it("fires only when a key is present and apps are off", () => {
+    expect(appsWarning({ COMPOSIO_API_KEY: "k" }, false)).toMatch(/--apps/);
+    expect(appsWarning({ COMPOSIO_API_KEY: "k" }, true)).toBeUndefined();
+    expect(appsWarning({}, false)).toBeUndefined();
+  });
+});
+
+describe("modelSpecFor", () => {
+  it("prefers the flag, then INSTINCT_MARITIME_MODEL, then the default; config otherwise", () => {
+    const config = { ...defaultConfig(), model: { ...defaultConfig().model, primary: "anthropic/x" } };
+    expect(modelSpecFor({ maritimeLlm: true, config, env: {} })).toBe("openai-compatible/gpt-5.4");
+    expect(modelSpecFor({ maritimeLlm: true, config, env: { INSTINCT_MARITIME_MODEL: "gpt-5" } })).toBe("openai-compatible/gpt-5");
+    expect(modelSpecFor({ maritimeLlm: true, model: "gpt-5.5", config, env: { INSTINCT_MARITIME_MODEL: "gpt-5" } })).toBe("openai-compatible/gpt-5.5");
+    expect(modelSpecFor({ maritimeLlm: true, model: "openai-compatible/custom", config, env: {} })).toBe("openai-compatible/custom");
+    expect(modelSpecFor({ config, env: {} })).toBe("anthropic/x");
+    expect(modelSpecFor({ model: "anthropic/y", config, env: {} })).toBe("anthropic/y");
+  });
+});
+
+describe("buildAuthorizeUrl", () => {
+  it("builds the Link OAuth URL with a default redirect on the local server", () => {
+    const u = new URL(buildAuthorizeUrl({ LINK_CLIENT_ID: "lc" }, "http://127.0.0.1:8080/", "st"));
+    expect(u.origin + u.pathname).toBe("https://login.link.com/auth");
+    expect(u.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:8080/oauth/link/callback");
+    expect(u.searchParams.get("state")).toBe("st");
+    expect(u.searchParams.get("scope")).toBe("payment_methods.agentic");
+    expect(() => buildAuthorizeUrl({}, "http://127.0.0.1:8080")).toThrow(/LINK_CLIENT_ID/);
   });
 });
 

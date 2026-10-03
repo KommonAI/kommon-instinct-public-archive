@@ -11,9 +11,16 @@ export interface Recorded {
   body: unknown;
 }
 
-export type Responder = (req: Recorded) => { status?: number; body?: unknown } | undefined;
+export interface Answer {
+  status?: number;
+  body?: unknown;
+  /** Extra response headers, for example `{ "Retry-After": "1" }`. */
+  headers?: Record<string, string>;
+}
 
-export function fakeFetch(routes: Record<string, Responder | { status?: number; body?: unknown }>, fallback?: Responder) {
+export type Responder = (req: Recorded) => Answer | undefined;
+
+export function fakeFetch(routes: Record<string, Responder | Answer>, fallback?: Responder) {
   const calls: Recorded[] = [];
   const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -40,7 +47,7 @@ export function fakeFetch(routes: Record<string, Responder | { status?: number; 
     // Response() refuses a body on 204/205/304, like a real server would.
     const noBody = status === 204 || status === 205 || status === 304 || answer.body === undefined;
     const body = noBody ? null : JSON.stringify(answer.body);
-    return new Response(body, { status, headers: { "content-type": "application/json" } });
+    return new Response(body, { status, headers: { "content-type": "application/json", ...(answer.headers ?? {}) } });
   }) as typeof fetch;
   return { fetchImpl, calls };
 }

@@ -3,11 +3,11 @@
  * provision the agent's identity (iMessage on), mint its keys and store them
  * under <dataDir>/secrets/inkbox.json.
  */
-import { loadConfig, saveConfig, type InstinctConfig } from "@open-instinct/core";
+import { isReservedHandle, loadConfig, saveConfig, type InstinctConfig } from "@open-instinct/core";
 import { InkboxPlanLimitError } from "@open-instinct/inkbox";
 import { parse, str, requireStr, flag, type OptionSpec } from "../args.js";
 import type { CliContext } from "../context.js";
-import { CliError } from "../io.js";
+import { CliError, UsageError } from "../io.js";
 import { makeProvisioner } from "../inkbox-client.js";
 import { readSecrets, secretsPath, secretsToEnv, writeSecrets, type InkboxSecrets } from "../secrets.js";
 import { printConnect } from "./connect.js";
@@ -23,6 +23,9 @@ export const initOptions: OptionSpec = {
   "agent-name": { type: "string" },
   "phone-number": { type: "boolean" },
   "skip-inkbox": { type: "boolean" },
+  apps: { type: "boolean" },
+  "no-apps": { type: "boolean" },
+  toolkits: { type: "string" },
 };
 
 export interface InitFlags {
@@ -36,21 +39,48 @@ export interface InitFlags {
   agentName?: string;
   phoneNumber: boolean;
   skipInkbox: boolean;
+  /** true: enable Composio apps; false: disable; undefined: leave as is. */
+  apps?: boolean;
+  /** Comma-separated Composio toolkit slugs. Setting them also enables apps. */
+  toolkits?: string[];
 }
 
-export function parseInitFlags(argv: string[]): InitFlags {
+export function splitToolkits(value: string | undefined): string[] | undefined {
+  if (value === undefined) return undefined;
+  const list = value
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return list.length > 0 ? list : undefined;
+}
+
+/**
+ * Flags, plus what the environment implies: a COMPOSIO_API_KEY or COMPOSIO_TOOLKITS
+ * in env means the person wants apps, and core only reads those on a fresh config.
+ */
+export function parseInitFlags(argv: string[], env: NodeJS.ProcessEnv = {}): InitFlags {
   const { values } = parse("init", argv, initOptions);
+  if (flag(values, "apps") && flag(values, "no-apps")) throw new UsageError("--apps and --no-apps cannot both be set", "init");
+  const handle = str(values, "handle");
+  // `owner` names the person behind every agent; the gateway refuses it at signup too.
+  if (handle && isReservedHandle(handle)) throw new UsageError(`--handle "${handle}" is reserved; pick another handle`, "init");
+  const toolkits = splitToolkits(str(values, "toolkits")) ?? splitToolkits(env.COMPOSIO_TOOLKITS);
+  let apps: boolean | undefined;
+  if (flag(values, "no-apps")) apps = false;
+  else if (flag(values, "apps") || toolkits || env.COMPOSIO_API_KEY) apps = true;
   return {
     name: requireStr(values, "name", "init"),
     phone: str(values, "phone"),
     email: str(values, "email"),
-    handle: str(values, "handle"),
+    handle,
     model: str(values, "model"),
     timezone: str(values, "timezone"),
     city: str(values, "city"),
     agentName: str(values, "agent-name"),
     phoneNumber: flag(values, "phone-number"),
     skipInkbox: flag(values, "skip-inkbox"),
+    apps,
+    toolkits: apps === false ? undefined : toolkits,
   };
 }
 
@@ -66,11 +96,14 @@ export function applyInitFlags(config: InstinctConfig, flags: InitFlags): Instin
   if (flags.agentName) agent.name = flags.agentName;
   const model = { ...config.model };
   if (flags.model) model.primary = flags.model;
-  return { ...config, owner, agent, model };
+  const apps = { ...config.apps };
+  if (flags.toolkits) apps.toolkits = flags.toolkits;
+  if (flags.apps !== undefined) apps.enabled = flags.apps;
+  return { ...config, owner, agent, model, apps };
 }
 
 export async function runInit(ctx: CliContext, argv: string[]): Promise<number> {
-  const flags = parseInitFlags(argv);
+  const flags = parseInitFlags(argv, ctx.env);
   const state = ctx.state();
   const { c } = ctx;
 
@@ -91,6 +124,7 @@ export async function runInit(ctx: CliContext, argv: string[]): Promise<number> 
   ctx.print(`  owner  ${config.owner.name}${config.owner.phones[0] ? `  ${config.owner.phones[0]}` : ""}${config.owner.emails[0] ? `  ${config.owner.emails[0]}` : ""}`);
   ctx.print(`  agent  ${config.agent.name}${config.agent.handle ? `  @${config.agent.handle}` : ""}`);
   ctx.print(`  model  ${config.model.primary}`);
+  ctx.print(`  apps   ${config.apps.enabled ? `on  ${config.apps.toolkits.join(",")}` : "off  (enable with --apps or COMPOSIO_API_KEY)"}`);
 
   const adminKey = ctx.env.INKBOX_ADMIN_API_KEY;
   if (!adminKey || flags.skipInkbox) {

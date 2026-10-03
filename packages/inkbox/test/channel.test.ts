@@ -102,6 +102,22 @@ describe("InkboxChannel routing", () => {
     expect(post?.body).toEqual({ recipients: { to: ["sam@example.com"] }, subject: "Re: Plans", body_text: "Sounds good.", in_reply_to_message_id: "<m2@x>" });
   });
 
+  it("answers an inbound email from replyRef.from with no `to` and no prior remember()", async () => {
+    // What core's runtime.deliver sends after a message.received webhook: no `to`, the inbound replyRef attached.
+    const msg = { channel: "email" as const, conversationKey: "email:th_1", text: "Thursday works.", replyRef: { from: "sam@example.com", subject: "Dinner next week", messageId: "<abc@mail.example>", threadId: "th_1" } };
+    await channel().send(msg, ctx("email:th_1"));
+    const post = sends("/api/v1/mail/mailboxes/maria-instinct@inkbox.ai/messages")[0];
+    expect(post?.body).toEqual({ recipients: { to: ["sam@example.com"] }, subject: "Re: Dinner next week", body_text: "Thursday works.", in_reply_to_message_id: "<abc@mail.example>" });
+  });
+
+  it("prefers replyRef over a stale remembered sender", async () => {
+    const ch = channel();
+    ch.remember({ id: "e", channel: "email", conversationKey: "email:th_3", from: "old@example.com", text: "x", replyRef: { subject: "Old", messageId: "<old@x>" }, receivedAt: "2026-10-03T00:00:00Z" });
+    await ch.send({ channel: "email", conversationKey: "email:th_3", text: "hi", replyRef: { from: "new@example.com", subject: "New", messageId: "<new@x>" } } as Parameters<typeof ch.send>[0], ctx("email:th_3"));
+    const post = sends("/api/v1/mail/mailboxes/maria-instinct@inkbox.ai/messages")[0];
+    expect(post?.body).toEqual({ recipients: { to: ["new@example.com"] }, subject: "Re: New", body_text: "hi", in_reply_to_message_id: "<new@x>" });
+  });
+
   it("fails clearly when an email has no recipient", async () => {
     await expect(channel().send({ channel: "email", conversationKey: "email:unknown", text: "x" }, ctx("email:unknown"))).rejects.toThrow(/recipient/);
   });
@@ -121,8 +137,19 @@ describe("InkboxChannel routing", () => {
     expect(post?.body).toEqual({ intent: "complete", parts: [{ text: "Maria is free Thursday after 7." }, { data: { oip: "1", intent: "inform" } }] });
   });
 
+  it("completes an A2A task from replyRef.taskId when msg.a2a is absent, and from remember() as a last resort", async () => {
+    const ch = channel();
+    await ch.send({ channel: "a2a", conversationKey: "a2a:ctx_1", text: "Free after 7.", replyRef: { taskId: "task_1", contextId: "ctx_1" } } as Parameters<typeof ch.send>[0], ctx("a2a:ctx_1"));
+    ch.remember({ id: "e", channel: "a2a", conversationKey: "a2a:ctx_1", from: "sam-instinct", text: "?", replyRef: { taskId: "task_1", contextId: "ctx_1" }, receivedAt: "2026-10-03T00:00:00Z" });
+    await ch.send({ channel: "a2a", conversationKey: "a2a:ctx_1", text: "Still free." }, ctx("a2a:ctx_1"));
+    const posts = sends("/api/v1/identities/maria-instinct/a2a/tasks/task_1/reply");
+    expect(posts).toHaveLength(2);
+    expect(posts[0]?.body).toEqual({ intent: "complete", parts: [{ text: "Free after 7." }] });
+    expect(posts[1]?.body).toEqual({ intent: "complete", parts: [{ text: "Still free." }] });
+  });
+
   it("refuses an A2A send without task details and unknown channels", async () => {
-    await expect(channel().send({ channel: "a2a", conversationKey: "a2a:ctx_1", text: "x" }, ctx("a2a:ctx_1"))).rejects.toThrow(/msg\.a2a/);
+    await expect(channel().send({ channel: "a2a", conversationKey: "a2a:ctx_1", text: "x" }, ctx("a2a:ctx_1"))).rejects.toThrow(/replyRef\.taskId/);
     await expect(channel().send({ channel: "chat", conversationKey: "chat:1", text: "x" }, ctx("chat:1"))).rejects.toThrow(/cannot deliver/);
   });
 

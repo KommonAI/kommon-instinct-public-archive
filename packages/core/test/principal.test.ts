@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ContactStore } from "../src/contacts.js";
-import { normalizeHandle, normalizePhone, resolvePrincipal } from "../src/principal.js";
+import { OWNER_EMAIL_PRINCIPAL_ID, isReservedHandle, normalizeHandle, normalizePhone, resolvePrincipal } from "../src/principal.js";
 import { inbound, tempState, testConfig } from "./helpers.js";
 
 describe("normalizePhone", () => {
@@ -33,7 +33,7 @@ describe("resolvePrincipal", () => {
     return store;
   }
 
-  it("recognises the owner by phone in any formatting, by email in any case, and on chat channels", () => {
+  it("recognises the owner by phone in any formatting and on local channels", () => {
     const c = contacts();
     for (const from of ["+16175550100", "(617) 555-0100", "617-555-0100", "16175550100"]) {
       const p = resolvePrincipal(inbound({ channel: "imessage", from }), config, c);
@@ -43,11 +43,33 @@ describe("resolvePrincipal", () => {
       expect(p.displayName).toBe("Maria");
       expect(p.phone).toBe("+16175550100");
     }
-    expect(resolvePrincipal(inbound({ channel: "email", from: "MARIA@example.com" }), config, c).kind).toBe("owner");
     for (const channel of ["chat", "scheduled", "system"] as const) {
       expect(resolvePrincipal(inbound({ channel, from: "anything" }), config, c).kind).toBe("owner");
     }
-    expect(resolvePrincipal(inbound({ channel: "imessage", from: "owner" }), config, c).kind).toBe("owner");
+  });
+
+  it("reduces the owner's own email address to a partner-tier contact, because From can be forged", () => {
+    const c = contacts();
+    const p = resolvePrincipal(inbound({ channel: "email", from: "MARIA@example.com" }), config, c);
+    expect(p.kind).toBe("contact");
+    expect(p.id).toBe(OWNER_EMAIL_PRINCIPAL_ID);
+    expect(p.tier).toBe("partner");
+    expect(p.email).toBe("maria@example.com");
+    expect(p.displayName).toContain("Maria");
+    expect(p.displayName).toMatch(/unverified/);
+  });
+
+  it("never honours the literal sender \"owner\" on a network channel", () => {
+    const c = contacts();
+    const im = resolvePrincipal(inbound({ channel: "imessage", from: "owner" }), config, c);
+    expect(im.kind).toBe("stranger");
+    expect(im.tier).toBe("stranger");
+    const a2a = resolvePrincipal(inbound({ channel: "a2a", from: "owner" }), config, c);
+    expect(a2a).toMatchObject({ kind: "stranger", tier: "stranger", id: "stranger:a2a:owner", agentHandle: "owner" });
+    expect(resolvePrincipal(inbound({ channel: "a2a", from: "@Owner" }), config, c).kind).toBe("stranger");
+    expect(resolvePrincipal(inbound({ channel: "email", from: "owner" }), config, c).kind).toBe("stranger");
+    expect(isReservedHandle("@OWNER")).toBe(true);
+    expect(isReservedHandle("sam-instinct")).toBe(false);
   });
 
   it("resolves contacts by phone and email with their tier", () => {

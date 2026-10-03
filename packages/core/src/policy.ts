@@ -23,10 +23,11 @@ type Row = [owner: Permission, partner: Permission, family: Permission, friend: 
 
 // Columns follow TIER_ORDER: owner, partner, family, friend, contact, stranger.
 // "intro" and "partial" are allowed outcomes that carry a hint for the prompt.
-// `web.read` and `apps.use` are not in the markdown table: they are transport
-// capabilities, and the specific capability on the same tool (calendar.freebusy,
-// email.send, ...) does the real gating, so they are open for everyone the owner
-// has placed in a tier and closed for contacts and strangers.
+// `web.read` (web_search, web_fetch; public hosts only, see core-tools.ts) and
+// `apps.use` (Composio app tools) are transport capabilities: the specific
+// capability on the same tool (calendar.freebusy, email.send, ...) does the real
+// gating, so they are open for everyone the owner has placed in a tier and closed
+// for contacts and strangers. Both rows appear in docs/PERMISSIONS.md.
 const ROWS: Record<Capability, Row> = {
   "converse": ["yes", "yes", "yes", "yes", "yes", "intro"],
   "owner.relay": ["yes", "yes", "yes", "yes", "yes", "yes"],
@@ -52,9 +53,14 @@ const ROWS: Record<Capability, Row> = {
   "network.invite": ["yes", "no", "no", "no", "no", "no"],
   "trust.manage": ["yes", "no", "no", "no", "no", "no"],
   "schedule.manage": ["yes", "no", "no", "no", "no", "no"],
+  // web.read: fetch and search public web pages (never loopback, private or metadata hosts).
   "web.read": ["yes", "yes", "yes", "yes", "no", "no"],
+  // apps.use: call connected app tools; each app tool also carries its own capability.
   "apps.use": ["yes", "yes", "yes", "yes", "no", "no"],
 };
+
+/** Capabilities that move money. The owner gets them under the spend policy; a grant never skips it. */
+export const SPEND_CAPABILITIES: ReadonlySet<Capability> = new Set(["purchase", "travel.book"]);
 
 const TIERS: Tier[] = ["owner", "partner", "family", "friend", "contact", "stranger"];
 
@@ -171,12 +177,19 @@ export class PolicyEngine {
     return this.policy.grants.filter((g) => ids.has(g.to) && this.isActive(g, at));
   }
 
-  private checkSpend(principal: Principal, capability: Capability, amount: number | undefined, args: unknown, label: string): PolicyDecision {
+  /**
+   * The spend policy. `grantCapUsd` layers a grant's maxUsd on top as the ask threshold:
+   * the owner's explicit "Sam can spend up to $150" replaces the owner's own askAbove, but
+   * blocked merchants, never-without-ask categories, the allow list, the per-action limit
+   * and the daily total still apply, and an unknown amount still asks.
+   */
+  private checkSpend(principal: Principal, capability: Capability, amount: number | undefined, args: unknown, label: string, grantCapUsd?: number): PolicyDecision {
     const s = this.policy.spend;
+    const asker = principal.kind === "owner" ? "" : `${principal.displayName} asks: `;
     const ask = (reason: string): PolicyDecision => ({
       outcome: "ask",
       reason,
-      approvalPrompt: `${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}? Reply YES or NO.`,
+      approvalPrompt: `${asker}${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}? Reply YES or NO.`,
     });
     const merchant = merchantOf(args);
     if (merchant && s.blockedMerchants.some((m) => merchant.includes(m.toLowerCase()))) {
@@ -190,12 +203,13 @@ export class PolicyEngine {
       return ask(`merchant${merchant ? ` ${merchant}` : ""} is not on the allowed list`);
     }
     if (amount > s.perActionUsd) return ask(`${fmtUsd(amount)} is above the per-action limit of ${fmtUsd(s.perActionUsd)}`);
-    if (amount > s.askAbove) return ask(`${fmtUsd(amount)} is above the ask threshold of ${fmtUsd(s.askAbove)}`);
+    const askAbove = grantCapUsd ?? s.askAbove;
+    if (amount > askAbove) return ask(`${fmtUsd(amount)} is above the ${grantCapUsd !== undefined ? "grant cap" : "ask threshold"} of ${fmtUsd(askAbove)}`);
     const spent = this.spentTodayUsd();
     if (spent + amount > s.perDayUsd) {
       return ask(`${fmtUsd(amount)} would take today's total to ${fmtUsd(spent + amount)}, above the daily limit of ${fmtUsd(s.perDayUsd)}`);
     }
-    return { outcome: "allow", reason: `${fmtUsd(amount)} is within the ${principal.tier} spend policy` };
+    return { outcome: "allow", reason: `${fmtUsd(amount)} is within the ${grantCapUsd !== undefined ? "grant and the" : `${principal.tier}`} spend policy` };
   }
 
   private evaluateOne(principal: Principal, capability: Capability, meta: ToolMeta, args: unknown, at: Date): CapOutcome {
@@ -208,11 +222,27 @@ export class PolicyEngine {
       approvalPrompt: `${principal.displayName} asks: ${label}${amount !== undefined ? ` (${fmtUsd(amount)})` : ""}. Reply YES or NO.`,
     };
 
+    // A blocked merchant is blocked for everyone; no tier, grant or approval opens it.
+    if (SPEND_CAPABILITIES.has(capability) && permission !== "no") {
+      const merchant = merchantOf(args);
+      if (merchant && this.policy.spend.blockedMerchants.some((m) => merchant.includes(m.toLowerCase()))) {
+        return { capability, permission, decision: { outcome: "deny", reason: `${merchant} is on the blocked merchant list` } };
+      }
+    }
+
     if (permission === "no" || permission === "ask") {
       const grant = this.grantsFor(principal, at).find((g) => g.capabilities.includes(capability));
       if (grant) {
         const max = grant.scope?.maxUsd;
-        if (max === undefined || amount === undefined || amount <= max) {
+        const covered = max === undefined || amount === undefined || amount <= max;
+        if (covered && SPEND_CAPABILITIES.has(capability)) {
+          // A grant to spend is still spending: run the owner's spend policy with the grant
+          // cap as the ask threshold, so blocked merchants, flights and the daily total hold.
+          const decision = this.checkSpend(principal, capability, amount, args, label, max);
+          if (decision.outcome === "allow") decision.viaGrant = grant.id;
+          return { capability, permission, decision };
+        }
+        if (covered) {
           return {
             capability,
             permission,
@@ -220,10 +250,11 @@ export class PolicyEngine {
           };
         }
         // The grant exists but the amount is over its cap: fall through to the tier default.
+        const over = `${fmtUsd(amount ?? 0)} exceeds grant ${grant.id} cap of ${fmtUsd(max ?? 0)}`;
         if (permission === "ask") {
-          return { capability, permission, decision: { ...askDecision, reason: `${fmtUsd(amount)} exceeds grant ${grant.id} cap of ${fmtUsd(max)}` } };
+          return { capability, permission, decision: { ...askDecision, reason: over } };
         }
-        return { capability, permission, decision: { outcome: "deny", reason: `${fmtUsd(amount)} exceeds grant ${grant.id} cap of ${fmtUsd(max)} and tier ${principal.tier} has no ${capability}` } };
+        return { capability, permission, decision: { outcome: "deny", reason: `${over} and tier ${principal.tier} has no ${capability}` } };
       }
       if (permission === "ask") return { capability, permission, decision: askDecision };
       return { capability, permission, decision: { outcome: "deny", reason: `tier ${principal.tier} may not ${capability}` } };

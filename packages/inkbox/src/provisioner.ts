@@ -71,10 +71,11 @@ function toProvisioned(raw: Dict): ProvisionedIdentity {
 export class InkboxProvisioner {
   private readonly rest: RestClient;
 
-  constructor(opts: { adminApiKey: string; baseUrl?: string; fetchImpl?: typeof fetch }) {
+  constructor(opts: { adminApiKey: string; baseUrl?: string; fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> }) {
     const restOpts: Parameters<typeof createRest>[0] = { apiKey: opts.adminApiKey };
     if (opts.baseUrl) restOpts.baseUrl = opts.baseUrl;
     if (opts.fetchImpl) restOpts.fetchImpl = opts.fetchImpl;
+    if (opts.sleep) restOpts.sleep = opts.sleep;
     this.rest = createRest(restOpts);
   }
 
@@ -188,12 +189,17 @@ export class InkboxProvisioner {
     await this.rest.request("PUT", `/identities/${encodeURIComponent(handle)}/a2a/settings`, { enabled: true });
   }
 
-  /** Allow a peer agent to call this identity (and vice versa). A duplicate rule is fine. */
+  /**
+   * Allow a peer agent to call this identity (and vice versa). A duplicate rule is fine.
+   * Wire shape follows the SDK's A2AResource.addContactRule (dist/a2a/resource.js):
+   * `{ action, match_type: "handle", match_target, direction }`. Keep them in step.
+   */
   async addContactRule(handle: string, peerHandle: string, direction: "inbound" | "outbound" | "both" = "both"): Promise<void> {
     try {
       await this.rest.request("POST", `/identities/${encodeURIComponent(handle)}/a2a/contact-rules`, {
-        handle: peerHandle.replace(/^@+/, ""),
         action: "allow",
+        match_type: "handle",
+        match_target: peerHandle.replace(/^@+/, ""),
         direction,
       });
     } catch (err) {

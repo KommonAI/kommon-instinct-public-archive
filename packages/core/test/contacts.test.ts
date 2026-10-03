@@ -11,6 +11,13 @@ describe("slugify", () => {
 });
 
 describe("ContactStore", () => {
+  it("refuses the reserved agent handle \"owner\"", () => {
+    const store = new ContactStore(tempState());
+    expect(() => store.upsert({ name: "Impostor", agentHandle: "@Owner" })).toThrow(/reserved/);
+    expect(store.all()).toHaveLength(0);
+    expect(store.findByHandle("owner")).toBeUndefined();
+  });
+
   it("creates contacts with slug ids, normalized addresses and a default tier", () => {
     const store = new ContactStore(tempState());
     const c = store.upsert({ name: "Sam Lee", phones: ["(415) 555-0199"], emails: ["Sam@Example.com"], agentHandle: "@Sam-Instinct" });

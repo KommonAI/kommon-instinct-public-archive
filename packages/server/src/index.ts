@@ -1,11 +1,42 @@
-export { boot, DEFAULT_MARITIME_MCP_URL } from "./boot.js";
+export { boot, apiKeyFor, DEFAULT_MARITIME_MCP_URL, PROVIDER_KEY_ENV } from "./boot.js";
 export type { BootOptions, BootResult } from "./boot.js";
-export { createHttpServer, handleChat, ownerChatMessage, statusJson, readBody, ACK_TEXT, BODY_LIMIT_BYTES } from "./http.js";
-export type { HttpApp, HttpServerOptions, ChatRequest, ChatResponse } from "./http.js";
-export { ConsoleOutbox } from "./console-outbox.js";
+export {
+  createHttpServer,
+  listenTunnelServer,
+  handleChat,
+  handleScheduledWake,
+  matchScheduleEntry,
+  ownerChatMessage,
+  statusJson,
+  readBody,
+  tokenMatches,
+  presentedToken,
+  linkPage,
+  ACK_TEXT,
+  BODY_LIMIT_BYTES,
+  CHAT_TOKEN_HEADER,
+  LINK_CALLBACK_EVENT,
+  SCHEDULE_WAKE_GRACE_MS,
+  TUNNEL_ROUTES,
+} from "./http.js";
+export type { HttpApp, HttpServerOptions, ChatRequest, ChatResponse, ChatBuffer, WalletCallback } from "./http.js";
+export { bindHostFor, LOOPBACK, ANY } from "./bind.js";
+export { ConsoleOutbox, ChatAwareOutbox, ChatReplyBuffer } from "./console-outbox.js";
 export type { ConsoleOutboxOptions, ConsoleSend } from "./console-outbox.js";
-export { fileTools, wrapAgentTool, FILE_TOOL_CAPABILITIES } from "./file-tools.js";
-export type { FileToolsOptions } from "./file-tools.js";
+export {
+  fileTools,
+  wrapAgentTool,
+  shellEnvFor,
+  resolveInsideWorkspace,
+  workspacePathGuard,
+  FILE_TOOL_CAPABILITIES,
+  SHELL_ENV_ALLOWLIST,
+  SECRET_NAME,
+} from "./file-tools.js";
+export type { FileToolsOptions, WrapOptions } from "./file-tools.js";
+export { describeDataPart, promptExtraFor } from "./hooks.js";
+export { paymentsEnv, loadPaymentsModule, PAYMENTS_PACKAGE, LINK_CALLBACK_PATH } from "./payments.js";
+export type { PaymentsModule, PaymentsEnv, LinkWalletLike, LinkWalletOptions, PaymentsToolDeps } from "./payments.js";
 export { createScheduleSync, schedulesEndpoint } from "./maritime-schedules.js";
 export type { ScheduleSync, ScheduleSyncOptions } from "./maritime-schedules.js";
 export { loadSkillsPrompt, resolveSkillsDir } from "./skills.js";

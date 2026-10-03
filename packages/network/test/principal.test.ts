@@ -43,6 +43,15 @@ describe("lookupContact", () => {
     expect(r.error).toContain("sam-lin");
   });
 
+  it("hides the candidates from non-owners when asked not to disclose", () => {
+    const r = lookupContact(contacts, "sam", { disclose: false });
+    expect(r.contact).toBeUndefined();
+    expect(r.error).toBe('Several contacts match "sam"; ask the owner.');
+    expect(r.error).not.toMatch(/sam-lee|sam-lin|Sam Lee|Sam Lin/);
+    // An exact single match still resolves.
+    expect(lookupContact(contacts, "Sam Lee", { disclose: false }).contact?.name).toBe("Sam Lee");
+  });
+
   it("reports empty and unknown input", () => {
     expect(lookupContact(contacts, "  ").error).toBe("No contact given.");
     expect(lookupContact(contacts, "zed").error).toContain("No contact matches");
@@ -72,6 +81,15 @@ describe("networkGuidance", () => {
     expect(text).toContain("say who you act for");
     expect(text).toContain("reply_instinct");
     expect(text).toContain("at most 3 options");
+    expect(text).toContain("declined with fail and reported to the owner");
+  });
+
+  it("tells the owner about group plans and tells contacts that out-of-scope asks are reported", () => {
+    expect(networkGuidance(owner)).toContain("`contacts`");
+    const lin = contacts.get("sam-lin")!;
+    const text = networkGuidance(contactPrincipal(lin));
+    expect(text).toContain("tell the owner what was asked");
+    expect(text).toContain("reaching other people's Instincts");
   });
 
   it("gives strangers and contacts nothing about the owner", () => {

@@ -116,12 +116,18 @@ mail as the owner.
 | `GOOGLECALENDAR_CREATE*`, `UPDATE*`, `DELETE*`, `PATCH*`, `QUICK_ADD*` | `calendar.write` |
 | `GOOGLECALENDAR_FIND_FREE_SLOTS`, `GOOGLECALENDAR_FREEBUSY`, `GOOGLECALENDAR_GET_FREE_BUSY` | `calendar.freebusy` |
 | other `GOOGLECALENDAR_*` | `calendar.read` |
-| `GOOGLECONTACTS_*` | `contacts.read` |
-| `COMPOSIO_MANAGE_CONNECTIONS`, `COMPOSIO_SEARCH_TOOLS`, `COMPOSIO_MULTI_EXECUTE_TOOL` | `apps.use` |
-| anything else (Slack, Notion, ...) | `apps.use` |
+| `GOOGLECONTACTS_CREATE*`, `UPDATE*`, `DELETE*`, `BATCH*`, `MODIFY*`, `ADD*`, `REMOVE*`, `PATCH*`, `COPY*` | `contacts.read` + `memory.write` (owner only) |
+| other `GOOGLECONTACTS_*` | `contacts.read` |
+| `COMPOSIO_MANAGE_CONNECTIONS`, `COMPOSIO_SEARCH_TOOLS`, `COMPOSIO_MULTI_EXECUTE_TOOL` | `apps.use` + `trust.manage` (owner only) |
+| anything else (Slack, Notion, ...) | `apps.use` + `trust.manage` (owner only) |
 
-By default only the owner holds `apps.use`, so unknown toolkits and the meta tools are owner-only
-until a grant says otherwise.
+`apps.use` is a transport tag. Core's tier table opens it to partner, family and friend so
+that a partner's Instinct can reach `GOOGLECALENDAR_EVENTS_LIST` and be judged by
+`calendar.read`. On its own it would not stop a friend from managing the owner's connections
+or running an unknown toolkit, so those rows carry a second, owner-only capability.
+`trust.manage` stands in for a future `apps.manage` and `memory.write` for a future
+`contacts.write`; the constants `APPS_MANAGE` and `CONTACTS_WRITE` are the single place to
+change when core adds them. A grant that names those capabilities widens access on purpose.
 
 ### Session mode and the multi-execute limitation
 
@@ -133,8 +139,8 @@ capability (`apps.use`) and cannot check the tools inside it. Two things limit t
   and multi-execute, while `manageConnections: { enable: true }` keeps the connect tool. Each app
   action gets its own capability tag.
 - When a deployment chooses `mode: "router"`, the MCP list holds only the meta tools. Everything
-  then costs `apps.use`, which is owner-only. The tool description also tells the model to prefer
-  direct tools.
+  then costs `APPS_MANAGE` (`apps.use` + `trust.manage`), which is owner-only. The tool description
+  also tells the model to prefer direct tools.
 
 Choose `router` only when the toolkit list is so large that direct listing is impractical.
 

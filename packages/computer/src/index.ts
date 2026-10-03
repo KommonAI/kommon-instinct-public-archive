@@ -21,7 +21,7 @@ export {
   maritimeMcpEndpoint,
   type MaritimeMcpBackendOptions,
 } from "./maritime.js";
-export { detectComputer, type DetectComputerOptions } from "./detect.js";
+export { detectComputer, waitForDesktopd, DESKTOPD_WAIT_MS, DESKTOPD_BACKOFF_MS, type DetectComputerOptions, type WaitForDesktopdOptions } from "./detect.js";
 export { computerGuidance } from "./guidance.js";
 export {
   ACTION_ENUM,

@@ -2,32 +2,41 @@
  * The agent runtime: one Pi Agent per conversation, the policy guard in beforeToolCall,
  * approvals, audit, session persistence, and the fast-ack / deliver-later behaviour the
  * 30 second /chat budget demands.
+ *
+ * Two keys matter here. The channel's conversation key (`imessage:<id>`) is where replies
+ * go. The runtime key is which Agent and transcript handles the message. They are the same
+ * for a 1:1 thread; in a group thread every participant gets a runtime key of their own, so a
+ * stranger in the group never sees what the owner's turns put in context.
  */
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Agent, type AgentMessage, type AgentTool, type BeforeToolCallResult, type StreamFn } from "@earendil-works/pi-agent-core";
 import { createInitialSystemMessage, toToolDeclaration, type ImageContent, type Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
-import type { ApprovalStore } from "./approvals.js";
+import type { ApprovalMatch, ApprovalStore } from "./approvals.js";
 import type { AuditLog } from "./audit.js";
 import type { ContactStore } from "./contacts.js";
 import type { MemoryStore } from "./memory.js";
-import { DEFAULT_TIER_TABLE, type PolicyEngine } from "./policy.js";
-import { resolvePrincipal } from "./principal.js";
+import { OwnerNotifier } from "./notifier.js";
+import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, type PolicyEngine } from "./policy.js";
+import { normalizePhone, resolvePrincipal } from "./principal.js";
 import { buildSystemPrompt, wrapUntrusted } from "./prompt.js";
 import type { Scheduler } from "./scheduler.js";
 import type { StateDir } from "./state.js";
 import type { RegisteredTool, ToolContext, ToolRegistry } from "./tools.js";
-import type {
-  Approval,
-  Capability,
-  Channel,
-  InboundMessage,
-  InstinctConfig,
-  OutboundMessage,
-  Principal,
-  ScheduleEntry,
-  ToolMeta,
+import {
+  TIER_ORDER,
+  type Approval,
+  type Capability,
+  type Channel,
+  type InboundMessage,
+  type InstinctConfig,
+  type OutboundMessage,
+  type Principal,
+  type ScheduleEntry,
+  type Tier,
+  type ToolMeta,
 } from "./types.js";
 
 export interface Outbox {
@@ -54,6 +63,10 @@ export interface RuntimeDeps {
   sessionsDir?: string;
   /** API key lookup handed to Pi; needed for "openai-compatible/..." models. Core never reads env. */
   getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+  /** Render a structured data part (an OIP message) for the model. Core falls back to fenced JSON. */
+  describeData?: (data: Record<string, unknown>) => string | undefined;
+  /** Extra system prompt sections per principal and channel, for example the network guidance. */
+  promptExtra?: (principal: Principal, channel: Channel) => string[];
 }
 
 export interface HandleResult {
@@ -66,22 +79,42 @@ export interface HandleResult {
 
 /** Messages kept verbatim in context; older ones are folded into one summary message. */
 export const SESSION_KEEP_MESSAGES = 60;
+/** Characters of kept transcript (JSON) before older turns are folded even if the count is under the limit. */
+export const SESSION_KEEP_CHARS = 240_000;
+/** An approved request can be acted on for this long before it lapses. */
+export const APPROVAL_USE_WINDOW_MS = 15 * 60 * 1000;
 const SEEN_IDS_MAX = 500;
 const DEFAULT_REPLY_BUDGET_MS = 20_000;
+const TYPING_TIMEOUT_MS = 2_000;
 const SEEN_FILE = "seen-ids.json";
 const STRANGERS_FILE = "strangers.json";
 const CONVERSATIONS_FILE = "conversations.json";
 const APPROVED_FILE = "approved.json";
-/** An approved request can be acted on for this long before it lapses. */
-const APPROVAL_USE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const PENDING_REPLIES_FILE = "pending-replies.json";
 const DELIVERABLE: ReadonlySet<Channel> = new Set(["imessage", "sms", "email", "a2a"]);
+/** Channels where the sender's identity is bound to the carrier or the process, so an owner reply can settle an approval. */
+const APPROVAL_CHANNELS: ReadonlySet<Channel> = new Set(["imessage", "sms", "chat"]);
 const CHANNELS: ReadonlySet<string> = new Set(["imessage", "sms", "email", "a2a", "chat", "scheduled", "system"]);
+const REPLY_TOOL = "reply_instinct";
 
 type OutboundChannel = OutboundMessage["channel"];
+type ReplyRef = Record<string, string | undefined>;
 
 interface StrangerDay {
   conversations: Record<string, number>;
   relays: number;
+}
+
+/** What conversations.json remembers per runtime key, so a restart can still resume and deliver. */
+interface ConversationRecord {
+  principal: Principal;
+  deliveryKey: string;
+  replyRef?: ReplyRef;
+}
+
+/** An approval the owner said yes to, waiting for the exact call to be retried. */
+interface ApprovedRecord extends Approval {
+  approvedAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,19 +123,28 @@ interface StrangerDay {
 
 interface ConversationOptions {
   key: string;
+  deliveryKey: string;
   principal: Principal;
   channel: Channel;
   agent: Agent;
   sessionFile: string;
+  replyRef: ReplyRef;
   refreshPrompt: () => string;
   now: () => Date;
 }
 
 export class Conversation {
+  /** Runtime key: which Agent and transcript. */
   readonly key: string;
+  /** Channel key: where replies are delivered. Same as `key` except in shared threads. */
+  readonly deliveryKey: string;
   principal: Principal;
   readonly agent: Agent;
   readonly channel: Channel;
+  /** Channel ids of the latest inbound message (email Message-ID, A2A task id, ...). */
+  replyRef: ReplyRef;
+  /** Set when the model answered an A2A task itself during the current run. */
+  repliedViaTool = false;
   busy = false;
   private readonly sessionFile: string;
   private readonly refreshPrompt: () => string;
@@ -110,10 +152,12 @@ export class Conversation {
 
   constructor(opts: ConversationOptions) {
     this.key = opts.key;
+    this.deliveryKey = opts.deliveryKey;
     this.principal = opts.principal;
     this.channel = opts.channel;
     this.agent = opts.agent;
     this.sessionFile = opts.sessionFile;
+    this.replyRef = opts.replyRef;
     this.refreshPrompt = opts.refreshPrompt;
     this.now = opts.now;
   }
@@ -122,8 +166,11 @@ export class Conversation {
   async run(text: string, images?: ImageContent[]): Promise<string> {
     if (this.busy) throw new Error(`Conversation ${this.key} is busy; use steer() or followUp()`);
     this.busy = true;
+    this.repliedViaTool = false;
     try {
       this.applySystemPrompt();
+      // The transcript grows between restarts too, so the fold runs before every turn.
+      this.agent.state.messages = trimContext(this.agent.state.messages, this.now());
       const before = this.agent.state.messages.length;
       await this.agent.prompt(text, images);
       await this.agent.waitForIdle();
@@ -164,11 +211,17 @@ export class Conversation {
 // Runtime
 // ---------------------------------------------------------------------------
 
+interface ConversationOpts {
+  deliveryKey?: string;
+  replyRef?: ReplyRef;
+}
+
 export class AgentRuntime {
   private readonly deps: RuntimeDeps;
   private readonly conversations = new Map<string, Conversation>();
   private readonly now: () => Date;
   private readonly sessionsDir: string;
+  private readonly notifier: OwnerNotifier;
   private ownerLast?: { conversationKey: string; channel: Channel };
 
   constructor(deps: RuntimeDeps) {
@@ -176,6 +229,12 @@ export class AgentRuntime {
     this.now = deps.now ?? (() => new Date());
     this.sessionsDir = deps.sessionsDir ?? deps.state.path("sessions");
     deps.state.ensure();
+    this.notifier = new OwnerNotifier({
+      state: deps.state,
+      audit: deps.audit,
+      now: this.now,
+      send: (text) => this.sendToOwner(text, this.ownerPrincipal(), "system"),
+    });
   }
 
   ownerPrincipal(): Principal {
@@ -196,20 +255,39 @@ export class AgentRuntime {
     return { conversations: this.conversations.size, busy };
   }
 
-  /** Get or create the conversation for a key. A changed principal (new tier) rebinds the tools. */
-  conversation(key: string, principal: Principal): Conversation {
+  /**
+   * Get or create the conversation for a runtime key. The same person at a changed tier
+   * keeps their transcript and gets the tools rebound. A different principal on the same
+   * key never inherits the transcript: it gets a fresh conversation with empty context.
+   */
+  conversation(key: string, principal: Principal, opts: ConversationOpts = {}): Conversation {
     const existing = this.conversations.get(key);
     if (existing) {
-      if (existing.principal.id !== principal.id || existing.principal.tier !== principal.tier) {
-        existing.principal = principal;
-        existing.agent.state.tools = this.bindTools(existing);
-        this.rememberConversation(key, principal);
+      if (existing.principal.id === principal.id) {
+        if (existing.principal.tier !== principal.tier || existing.principal.cappedFrom !== principal.cappedFrom) {
+          existing.principal = principal;
+          existing.agent.state.tools = this.bindTools(existing);
+        }
+        if (opts.replyRef) existing.replyRef = opts.replyRef;
+        this.rememberConversation(existing);
+        return existing;
       }
-      return existing;
+      // The old conversation finishes on its own and is simply no longer the one for this key.
+      this.conversations.delete(key);
+      this.deps.audit.append({ kind: "policy", conversationKey: key, principal: principal.id, detail: { reset: "principal changed", from: existing.principal.id } });
+      return this.createConversation(key, principal, opts, []);
     }
+    const sessionFile = join(this.sessionsDir, `${encodeURIComponent(key)}.jsonl`);
+    const record = this.recallRecord(key);
+    // A transcript on disk belongs to whoever wrote it; someone else starts clean.
+    const stored = record && record.principal.id !== principal.id ? [] : readSession(sessionFile);
+    return this.createConversation(key, principal, { deliveryKey: opts.deliveryKey ?? record?.deliveryKey, replyRef: opts.replyRef ?? record?.replyRef }, stored);
+  }
+
+  private createConversation(key: string, principal: Principal, opts: ConversationOpts, stored: AgentMessage[]): Conversation {
     const channel = channelOf(key);
     const sessionFile = join(this.sessionsDir, `${encodeURIComponent(key)}.jsonl`);
-    const restored = restoreMessages(readSession(sessionFile), this.now());
+    const restored = restoreMessages(stored, this.now());
 
     // The Conversation needs the Agent and the Agent's hooks need the Conversation, so the
     // Agent is created with a placeholder tool list and tools are bound right after.
@@ -225,6 +303,7 @@ export class AgentRuntime {
       streamFn: this.deps.streamFn ?? (streamSimple as StreamFn),
       getApiKey: this.deps.getApiKey,
       toolExecution: "sequential",
+      transformContext: async (messages) => trimContext(messages, this.now()),
       beforeToolCall: async ({ toolCall, args }) => this.guard(conv, toolCall.name, args),
       afterToolCall: async ({ toolCall, args, isError, result }) => {
         this.recordToolCall(conv, toolCall.name, args, isError, result?.content);
@@ -233,22 +312,28 @@ export class AgentRuntime {
     });
     conv = new Conversation({
       key,
+      deliveryKey: opts.deliveryKey ?? key,
       principal,
       channel,
       agent,
       sessionFile,
+      replyRef: opts.replyRef ?? {},
       now: this.now,
       refreshPrompt: () => this.systemPromptFor(conv),
     });
     agent.state.tools = this.bindTools(conv);
     this.conversations.set(key, conv);
-    this.rememberConversation(key, principal);
+    if (stored.length === 0) writeSession(sessionFile, []);
+    this.rememberConversation(conv);
     return conv;
   }
 
   async handleInbound(msg: InboundMessage): Promise<HandleResult> {
+    const startedAt = Date.now();
     const { audit, approvals, config, contacts, policy } = this.deps;
-    const principal = resolvePrincipal(msg, config, contacts);
+    const group = isGroup(msg);
+    let principal = resolvePrincipal(msg, config, contacts);
+    if (group && principal.kind === "owner") principal = this.capForGroup(principal, msg);
     const base = { principal, conversationKey: msg.conversationKey };
 
     if (this.seenBefore(msg.id)) return { ...base, acked: true, blocked: "duplicate" };
@@ -257,7 +342,7 @@ export class AgentRuntime {
       kind: "inbound",
       conversationKey: msg.conversationKey,
       principal: principal.id,
-      detail: { id: msg.id, channel: msg.channel, from: msg.from, chars: msg.text.length, source: msg.source },
+      detail: { id: msg.id, channel: msg.channel, from: msg.from, chars: msg.text.length, source: msg.source, ...(group ? { group: true, tier: principal.tier } : {}) },
     });
 
     if (principal.kind === "stranger") {
@@ -268,46 +353,60 @@ export class AgentRuntime {
       }
     }
 
-    if (principal.kind === "owner") {
-      this.ownerLast = { conversationKey: msg.conversationKey, channel: msg.channel };
-      const match = approvals.matchReply(msg.text);
-      if (match) return this.handleApprovalReply(msg, principal, match);
+    let text = msg.text;
+    let approvalNote: string | undefined;
+    if (principal.kind === "owner" && !group) {
+      if (DELIVERABLE.has(msg.channel) && msg.channel !== "a2a") this.ownerLast = { conversationKey: msg.conversationKey, channel: msg.channel };
+      // Only a carrier-bound or local channel can settle an approval; an email From is not proof.
+      const match = APPROVAL_CHANNELS.has(msg.channel) ? approvals.matchReply(msg.text) : undefined;
+      if (match) {
+        approvalNote = await this.settleApproval(msg, principal, match);
+        if (!match.remainder) return { ...base, acked: true, reply: approvalNote };
+        text = match.remainder;
+      }
     }
 
-    const text = principal.kind === "owner" ? msg.text : wrapUntrusted(msg.text, untrustedLabel(msg, principal));
-    const prompt = withAttachments(text, msg);
-    const conv = this.conversation(msg.conversationKey, principal);
+    // Everything the sender controls (text, attachment names, data parts) sits inside the
+    // untrusted boundary when the sender is not the owner.
+    const body = withData(withAttachments(text, msg), msg, this.deps.describeData);
+    const prompt = principal.kind === "owner" ? body : wrapUntrusted(body, untrustedLabel(msg, principal));
+    const conv = this.conversation(runtimeKey(msg, principal), principal, { deliveryKey: msg.conversationKey, replyRef: msg.replyRef });
+    const stashed = this.takeStash(conv.key);
+    const joinReply = (reply: string | undefined) => [approvalNote, ...stashed, reply].filter((t): t is string => Boolean(t)).join("\n\n") || undefined;
 
     if (conv.busy) {
       conv.steer(prompt);
-      return { ...base, acked: true };
+      return { ...base, acked: true, reply: joinReply(undefined) };
     }
 
+    // Typing is a courtesy, never a cost: it runs alongside the model and is dropped when slow.
     if (DELIVERABLE.has(msg.channel) && this.deps.outbox.typing) {
-      await this.deps.outbox.typing(msg.conversationKey).catch(() => undefined);
+      void withinBudget(this.deps.outbox.typing(msg.conversationKey).catch(() => undefined), TYPING_TIMEOUT_MS);
     }
 
     const budget = this.deps.replyBudgetMs ?? DEFAULT_REPLY_BUDGET_MS;
+    const promptedBefore = approvals.promptedToken();
     const run = conv.run(prompt).then(
       (reply) => ({ ok: true as const, reply }),
       (error: unknown) => ({ ok: false as const, error }),
     );
-    const outcome = await withinBudget(run, budget);
+    const outcome = await withinBudget(run, Math.max(0, budget - (Date.now() - startedAt)));
 
     if (outcome.state === "done") {
       const reply = this.replyText(outcome.value, principal);
-      if (!outcome.value.ok) this.auditError(msg.conversationKey, principal, outcome.value.error);
-      if (DELIVERABLE.has(msg.channel) && reply) await this.deliver(msg.channel, msg.conversationKey, principal, reply, msg.replyRef);
-      return { ...base, acked: true, reply };
+      if (!outcome.value.ok) this.auditError(conv.key, principal, outcome.value.error);
+      if (DELIVERABLE.has(msg.channel) && reply) await this.deliver(conv, reply, { keepPrompt: approvals.promptedToken() !== promptedBefore });
+      return { ...base, acked: true, reply: joinReply(reply) };
     }
 
     // Too slow for the HTTP budget: acknowledge now and deliver the final text when it lands.
+    // Channels without an outbox (dashboard chat) get the text on their next turn instead.
     void run.then(async (value) => {
-      if (!value.ok) this.auditError(msg.conversationKey, principal, value.error);
+      if (!value.ok) this.auditError(conv.key, principal, value.error);
       const reply = this.replyText(value, principal);
-      if (reply) await this.deliver(msg.channel, msg.conversationKey, principal, reply, msg.replyRef);
+      if (reply) await this.deliver(conv, reply, { keepPrompt: approvals.promptedToken() !== promptedBefore });
     });
-    return { ...base, acked: true, reply: ackText(msg.channel) };
+    return { ...base, acked: true, reply: joinReply(ackText(msg.channel)) };
   }
 
   /** Scheduled jobs run as the owner in their own conversation; results go to the owner's phone. */
@@ -352,28 +451,41 @@ export class AgentRuntime {
 
     if (decision.outcome === "allow") return undefined;
     if (decision.outcome === "deny") {
+      // Enforced twice: the requester hears a polite no, and the owner hears that it was asked.
+      if (principal.kind !== "owner") {
+        await this.notifier.notify({ conversationKey: conv.key, principal: principal.id, action: safeDescribe(meta, args), outcome: "declined" }, principal.displayName);
+      }
       return { block: true, reason: `Blocked by policy: ${decision.reason}. Do not retry. Explain politely that you cannot do this for them.` };
     }
 
     const amountUsd = meta.amountUsd?.(args);
     const capability = askedCapability(principal, meta);
+    const argsHash = hashArgs(args);
 
-    // The owner already said yes in this conversation: spend that approval once and let the call run.
-    const consumed = this.consumeApproval(conv.key, capability, amountUsd);
+    // The owner already said yes to this exact call in this conversation: spend that approval once.
+    const consumed = this.consumeApproval({ conversationKey: conv.key, requestedBy: principal.id, capability, toolName, argsHash, amountUsd });
     if (consumed) {
       audit.append({ kind: "policy", conversationKey: conv.key, principal: principal.id, detail: { tool: toolName, outcome: "allow", reason: `owner approved ${consumed.token}: ${consumed.summary}` } });
       return undefined;
     }
 
-    const approval = approvals.create({
-      conversationKey: conv.key,
-      requestedBy: principal.id,
-      summary: decision.approvalPrompt,
-      capability,
-      ...(amountUsd !== undefined ? { amountUsd } : {}),
-    });
-    audit.append({ kind: "approval", conversationKey: conv.key, principal: principal.id, detail: { token: approval.token, status: "pending", summary: approval.summary, tool: toolName } });
-    await this.sendToOwner(approvalText(approval, principal, config), this.ownerPrincipal(), conv.key);
+    // The same call is already waiting on the owner: do not text them twice.
+    const waiting = approvals.findPending({ conversationKey: conv.key, toolName, argsHash });
+    const approval =
+      waiting ??
+      approvals.create({
+        conversationKey: conv.key,
+        requestedBy: principal.id,
+        summary: decision.approvalPrompt,
+        capability,
+        toolName,
+        argsHash,
+        ...(amountUsd !== undefined ? { amountUsd } : {}),
+      });
+    if (!waiting) {
+      audit.append({ kind: "approval", conversationKey: conv.key, principal: principal.id, detail: { token: approval.token, status: "pending", summary: approval.summary, tool: toolName } });
+      await this.sendToOwner(approvalText(approval, principal, config), this.ownerPrincipal(), conv.key, { approvalToken: approval.token });
+    }
     return {
       block: true,
       reason:
@@ -390,9 +502,13 @@ export class AgentRuntime {
     const preview = contentPreview(content);
     if (preview) detail.result = preview;
     audit.append({ kind: "tool_call", conversationKey: conv.key, principal: conv.principal.id, detail });
+    if (toolName === REPLY_TOOL && !isError) conv.repliedViaTool = true;
+    if (isError) return;
     const amountUsd = meta?.amountUsd?.(args);
-    if (!isError && amountUsd !== undefined && amountUsd > 0) {
-      audit.append({ kind: "spend", conversationKey: conv.key, principal: conv.principal.id, detail: { tool: toolName, amountUsd, summary: safeDescribe(meta, args) } });
+    const spends = meta?.capabilities.some((c) => SPEND_CAPABILITIES.has(c)) ?? false;
+    if ((amountUsd !== undefined && amountUsd > 0) || spends) {
+      // Spend entries feed the daily total; a purchase with no amount is still recorded so it is visible.
+      audit.append({ kind: "spend", conversationKey: conv.key, principal: conv.principal.id, detail: { tool: toolName, ...(amountUsd !== undefined ? { amountUsd } : {}), summary: safeDescribe(meta, args) } });
     }
   }
 
@@ -404,44 +520,42 @@ export class AgentRuntime {
   // Approvals
   // -------------------------------------------------------------------------
 
-  private async handleApprovalReply(
-    msg: InboundMessage,
-    principal: Principal,
-    match: { approval: Approval; approved: boolean },
-  ): Promise<HandleResult> {
+  /** Record the owner's verdict, wake the waiting conversation, and return the note for the owner. */
+  private async settleApproval(msg: InboundMessage, principal: Principal, match: ApprovalMatch): Promise<string> {
     const { approvals, audit } = this.deps;
     // matchReply already resolves the approval; only resolve here if a custom store left it pending.
     const resolved = match.approval.status === "pending" ? approvals.resolve(match.approval.token, match.approved) ?? match.approval : match.approval;
     const verb = match.approved ? "approved" : "denied";
     audit.append({ kind: "approval", conversationKey: resolved.conversationKey, principal: principal.id, detail: { token: resolved.token, status: resolved.status, summary: resolved.summary } });
 
-    if (match.approved) this.rememberApproved(resolved);
+    // A relay approval (ask_owner) informs the model through the follow-up only; it never
+    // pre-authorises a policy ask.
+    if (match.approved && resolved.capability !== "owner.relay") this.rememberApproved(resolved);
 
     const note = `${match.approved ? "Approved" : "Denied"}: ${resolved.summary}`;
-    const followUp = `Owner ${verb}: ${resolved.summary}`;
-    await this.resumeConversation(resolved.conversationKey, followUp);
+    await this.resumeConversation(resolved.conversationKey, `Owner ${verb}: ${resolved.summary}`);
 
-    const base = { principal, conversationKey: msg.conversationKey, acked: true };
     if (DELIVERABLE.has(msg.channel)) {
-      await this.deliver(msg.channel, msg.conversationKey, principal, note, msg.replyRef);
+      await this.safeSend({ channel: msg.channel as OutboundChannel, conversationKey: msg.conversationKey, text: note, replyRef: msg.replyRef }, principal, msg.conversationKey);
     }
-    return { ...base, reply: note };
+    return note;
   }
 
   /** Wake the conversation that was waiting on the owner. Busy: queue. Idle: run and deliver. */
   private async resumeConversation(key: string, text: string): Promise<void> {
-    const principal = this.conversations.get(key)?.principal ?? this.recallPrincipal(key);
-    if (!principal) return;
-    const conv = this.conversation(key, principal);
+    const live = this.conversations.get(key);
+    const record = live ? { principal: live.principal, deliveryKey: live.deliveryKey, replyRef: live.replyRef } : this.recallRecord(key);
+    if (!record) return;
+    const conv = this.conversation(key, record.principal, { deliveryKey: record.deliveryKey, replyRef: record.replyRef });
     if (conv.busy) {
       conv.followUp(text);
       return;
     }
     void conv.run(text).then(
       async (reply) => {
-        if (reply && DELIVERABLE.has(conv.channel)) await this.deliver(conv.channel, key, principal, reply, {});
+        if (reply) await this.deliver(conv, reply);
       },
-      (error: unknown) => this.auditError(key, principal, error),
+      (error: unknown) => this.auditError(key, record.principal, error),
     );
   }
 
@@ -449,37 +563,66 @@ export class AgentRuntime {
   // Delivery
   // -------------------------------------------------------------------------
 
-  private async deliver(channel: Channel, conversationKey: string, principal: Principal, text: string, replyRef: Record<string, string | undefined>): Promise<void> {
+  /**
+   * Send the model's reply where the conversation lives. Dashboard chat has no outbox, so
+   * its text is stashed for the next turn. A2A replies carry the task id and say "progress"
+   * while an approval is pending, and are skipped when the model already answered itself.
+   */
+  private async deliver(conv: Conversation, text: string, opts: { keepPrompt?: boolean } = {}): Promise<void> {
+    const channel = conv.channel;
     if (channel === "scheduled" || channel === "system") return;
-    const out: OutboundMessage = { channel, conversationKey, text };
-    if (channel === "a2a" && replyRef.taskId) out.a2a = { taskId: replyRef.taskId, intent: "complete" };
-    await this.safeSend(out, principal, conversationKey);
+    if (!DELIVERABLE.has(channel)) {
+      this.stash(conv.key, text);
+      return;
+    }
+    const out: OutboundMessage = { channel: channel as OutboundChannel, conversationKey: conv.deliveryKey, text, replyRef: conv.replyRef };
+    if (channel === "a2a") {
+      if (conv.repliedViaTool) return;
+      const taskId = conv.replyRef.taskId;
+      if (!taskId) {
+        this.deps.audit.append({ kind: "error", conversationKey: conv.key, principal: conv.principal.id, detail: { message: "A2A reply dropped: no task id on record" } });
+        return;
+      }
+      const waiting = this.deps.approvals.pending().some((a) => a.conversationKey === conv.key);
+      out.a2a = { taskId, intent: waiting ? "progress" : "complete" };
+    }
+    // A reply to the owner changes what their next bare "yes" is about, unless this run raised the question.
+    if (conv.principal.kind === "owner" && !opts.keepPrompt) this.deps.approvals.clearPrompted();
+    await this.safeSend(out, conv.principal, conv.key);
   }
 
-  /** Owner messages go to the owner's last live thread, else to their first phone by iMessage. */
-  private async sendToOwner(text: string, principal: Principal, originKey: string): Promise<void> {
+  /**
+   * Owner messages go to the owner's last live text thread, else to their first phone by
+   * iMessage, else to their last email thread. Group threads are never used for this.
+   */
+  private async sendToOwner(text: string, principal: Principal, originKey: string, opts: { approvalToken?: string } = {}): Promise<void> {
     const last = this.ownerLast;
     const phone = this.deps.config.owner.phones[0];
     let out: OutboundMessage;
-    if (last && DELIVERABLE.has(last.channel) && last.channel !== "a2a") {
-      out = { channel: last.channel as OutboundChannel, conversationKey: last.conversationKey, text };
+    if (last && (last.channel === "imessage" || last.channel === "sms")) {
+      out = { channel: last.channel, conversationKey: last.conversationKey, text };
     } else if (phone) {
       out = { channel: "imessage", to: phone, text };
-    } else if (last) {
+    } else if (last && DELIVERABLE.has(last.channel) && last.channel !== "a2a") {
       out = { channel: last.channel as OutboundChannel, conversationKey: last.conversationKey, text };
     } else {
       this.deps.audit.append({ kind: "error", conversationKey: originKey, principal: principal.id, detail: { message: "No way to reach the owner: no phone and no prior conversation" } });
       return;
     }
-    await this.safeSend(out, principal, originKey);
+    const sent = await this.safeSend(out, principal, originKey);
+    if (!sent) return;
+    if (opts.approvalToken) this.deps.approvals.markPrompted(opts.approvalToken);
+    else this.deps.approvals.clearPrompted();
   }
 
-  private async safeSend(out: OutboundMessage, principal: Principal, conversationKey: string): Promise<void> {
+  private async safeSend(out: OutboundMessage, principal: Principal, conversationKey: string): Promise<boolean> {
     try {
       await this.deps.outbox.send(out, { principal, conversationKey });
       this.deps.audit.append({ kind: "outbound", conversationKey, principal: principal.id, detail: { channel: out.channel, to: out.to, conversationKey: out.conversationKey, chars: out.text.length } });
+      return true;
     } catch (error) {
       this.auditError(conversationKey, principal, error);
+      return false;
     }
   }
 
@@ -505,7 +648,8 @@ export class AgentRuntime {
       groups.add(meta.group);
       for (const c of meta.capabilities) if (policy.canEver(principal, c)) capabilities.add(c);
     }
-    const pending = approvals.pending().filter((a) => principal.kind === "owner" || a.conversationKey === conv.key);
+    const pending = approvals.pending().filter((a) => (principal.kind === "owner" && principal.tier === "owner") || a.conversationKey === conv.key);
+    const extra = this.deps.promptExtra?.(principal, conv.channel) ?? [];
     return buildSystemPrompt({
       config,
       principal,
@@ -513,11 +657,27 @@ export class AgentRuntime {
       now: this.now(),
       capabilities: [...capabilities],
       toolGroups: [...groups],
-      // Memory is the owner's private notebook; nobody else gets the digest.
-      memoryDigest: principal.kind === "owner" ? memory.digest(4000, this.now()) : "",
+      memoryDigest: this.memoryDigestFor(principal),
       skillsPrompt,
       pendingApprovals: pending,
+      extra,
     });
+  }
+
+  /**
+   * Memory is the owner's private notebook. The owner in their own thread gets the whole
+   * digest. Anyone whose tier may know the owner's preferences gets the Preferences section
+   * only, and nobody else gets anything.
+   */
+  private memoryDigestFor(principal: Principal): string {
+    const { memory, policy } = this.deps;
+    if (principal.kind === "owner" && principal.tier === "owner") return memory.digest(4000, this.now());
+    const permission = policy.permissionFor(principal.tier, "owner.profile.preferences");
+    if (permission !== "yes" && permission !== "partial") return "";
+    const prefs = memory.preferencesDigest(permission === "yes" ? 1500 : 600);
+    if (!prefs) return "";
+    const scope = permission === "yes" ? "They may know most of these." : "Share only general, harmless preferences from this list; keep anything personal, medical or financial to yourself.";
+    return `## ${this.deps.config.owner.name}'s preferences (tier ${principal.tier})\n${scope}\n${prefs}`;
   }
 
   private bindTools(conv: Conversation): AgentTool<any>[] {
@@ -534,6 +694,26 @@ export class AgentRuntime {
     return registry.bind(ctx, visible);
   }
 
+  /**
+   * In a group thread every reply is visible to everyone, so the owner acts at the lowest
+   * tier present. Unknown participants are strangers; an unknown member list caps to stranger.
+   */
+  private capForGroup(owner: Principal, msg: InboundMessage): Principal {
+    const ownerPhones = new Set(this.deps.config.owner.phones.map(normalizePhone));
+    const participants = Array.isArray(msg.meta?.participants) ? (msg.meta!.participants as unknown[]).filter((p): p is string => typeof p === "string") : [];
+    let lowest: Tier = "owner";
+    let others = 0;
+    for (const raw of participants) {
+      const phone = normalizePhone(raw);
+      if (!phone || ownerPhones.has(phone)) continue;
+      others++;
+      const tier = this.deps.contacts.findByPhone(phone)?.tier ?? "stranger";
+      if (TIER_ORDER.indexOf(tier) > TIER_ORDER.indexOf(lowest)) lowest = tier;
+    }
+    if (others === 0) lowest = "stranger";
+    return { ...owner, tier: lowest, cappedFrom: "owner" };
+  }
+
   // -------------------------------------------------------------------------
   // Small persisted bookkeeping
   // -------------------------------------------------------------------------
@@ -546,41 +726,77 @@ export class AgentRuntime {
     return false;
   }
 
-  private rememberConversation(key: string, principal: Principal): void {
-    const map = this.deps.state.readJson<Record<string, Principal>>(CONVERSATIONS_FILE, {});
-    map[key] = principal;
+  private rememberConversation(conv: Conversation): void {
+    const map = this.deps.state.readJson<Record<string, unknown>>(CONVERSATIONS_FILE, {});
+    const record: ConversationRecord = { principal: conv.principal, deliveryKey: conv.deliveryKey, replyRef: conv.replyRef };
+    map[conv.key] = record;
     this.deps.state.writeJson(CONVERSATIONS_FILE, map);
   }
 
-  private recallPrincipal(key: string): Principal | undefined {
-    return this.deps.state.readJson<Record<string, Principal>>(CONVERSATIONS_FILE, {})[key];
+  private recallRecord(key: string): ConversationRecord | undefined {
+    const raw = this.deps.state.readJson<Record<string, unknown>>(CONVERSATIONS_FILE, {})[key];
+    if (!raw || typeof raw !== "object") return undefined;
+    const o = raw as Record<string, unknown>;
+    // Older files stored the bare Principal.
+    if (typeof o.kind === "string" && typeof o.id === "string") return { principal: o as unknown as Principal, deliveryKey: key };
+    if (!o.principal || typeof o.principal !== "object") return undefined;
+    return {
+      principal: o.principal as Principal,
+      deliveryKey: typeof o.deliveryKey === "string" ? o.deliveryKey : key,
+      ...(o.replyRef && typeof o.replyRef === "object" ? { replyRef: o.replyRef as ReplyRef } : {}),
+    };
   }
 
   private rememberApproved(approval: Approval): void {
-    const list = this.deps.state.readJson<Approval[]>(APPROVED_FILE, []);
-    list.push({ ...approval, status: "approved" });
+    const list = this.deps.state.readJson<ApprovedRecord[]>(APPROVED_FILE, []);
+    list.push({ ...approval, status: "approved", approvedAt: this.now().toISOString() });
     this.deps.state.writeJson(APPROVED_FILE, list);
   }
 
   /**
-   * Find and remove one approved request that covers this call. A relay approval
-   * ("ask_owner") counts for any capability in its conversation; a policy approval only
-   * for its own capability. Amounts may not exceed what was approved by more than 5%.
+   * Find and remove one approved request that covers this exact call: same conversation,
+   * same requester, same capability, same tool and the same arguments, approved within
+   * APPROVAL_USE_WINDOW_MS. Amounts may not exceed what was approved by more than 5%.
+   * Stale entries are swept on every call.
    */
-  private consumeApproval(conversationKey: string, capability: Capability, amountUsd: number | undefined): Approval | undefined {
+  private consumeApproval(call: { conversationKey: string; requestedBy: string; capability: Capability; toolName: string; argsHash: string; amountUsd: number | undefined }): Approval | undefined {
     const nowMs = this.now().getTime();
-    const list = this.deps.state.readJson<Approval[]>(APPROVED_FILE, []);
-    const fresh = list.filter((a) => Date.parse(a.createdAt) + APPROVAL_USE_WINDOW_MS > nowMs);
+    const list = this.deps.state.readJson<ApprovedRecord[]>(APPROVED_FILE, []);
+    const fresh = list.filter((a) => Date.parse(a.approvedAt ?? a.createdAt) + APPROVAL_USE_WINDOW_MS > nowMs);
     const index = fresh.findIndex(
       (a) =>
-        a.conversationKey === conversationKey &&
-        (a.capability === "owner.relay" || a.capability === capability) &&
-        (a.amountUsd === undefined || amountUsd === undefined || amountUsd <= a.amountUsd * 1.05),
+        a.conversationKey === call.conversationKey &&
+        a.requestedBy === call.requestedBy &&
+        a.capability === call.capability &&
+        a.toolName === call.toolName &&
+        a.argsHash === call.argsHash &&
+        (call.amountUsd === undefined ? a.amountUsd === undefined : a.amountUsd !== undefined && call.amountUsd <= a.amountUsd * 1.05),
     );
     const match = index >= 0 ? fresh[index] : undefined;
     if (match) fresh.splice(index, 1);
     if (match || fresh.length !== list.length) this.deps.state.writeJson(APPROVED_FILE, fresh);
     return match;
+  }
+
+  /** Replies that could not be delivered (dashboard chat) wait here for the next turn on that key. */
+  private stash(key: string, text: string): void {
+    const all = this.deps.state.readJson<Record<string, string[]>>(PENDING_REPLIES_FILE, {});
+    (all[key] ??= []).push(text);
+    this.deps.state.writeJson(PENDING_REPLIES_FILE, all);
+  }
+
+  private takeStash(key: string): string[] {
+    const all = this.deps.state.readJson<Record<string, string[]>>(PENDING_REPLIES_FILE, {});
+    const texts = all[key];
+    if (!texts || texts.length === 0) return [];
+    delete all[key];
+    this.deps.state.writeJson(PENDING_REPLIES_FILE, all);
+    return texts;
+  }
+
+  /** Replies waiting for the next turn on a key, without taking them. */
+  pendingReplies(key: string): string[] {
+    return this.deps.state.readJson<Record<string, string[]>>(PENDING_REPLIES_FILE, {})[key] ?? [];
   }
 
   private strangerDay(): { day: string; record: StrangerDay; save: () => void } {
@@ -647,17 +863,20 @@ export function writeSession(file: string, messages: AgentMessage[]): void {
 
 /**
  * Rebuild a context from stored messages: drop system messages (rebuilt per run), drop a
- * trailing tool call that never got its result, keep the last SESSION_KEEP_MESSAGES and fold
- * everything older into one plain-text summary message.
+ * trailing tool call that never got its result, keep the last SESSION_KEEP_MESSAGES (and
+ * no more than SESSION_KEEP_CHARS of JSON) and fold everything older into one plain-text
+ * summary message. Idempotent on an already folded transcript.
  */
-export function restoreMessages(stored: AgentMessage[], now: Date, keep = SESSION_KEEP_MESSAGES): AgentMessage[] {
+export function restoreMessages(stored: AgentMessage[], now: Date, keep = SESSION_KEEP_MESSAGES, maxChars = SESSION_KEEP_CHARS): AgentMessage[] {
   const messages = dropOrphanToolCalls(stored.filter((m) => m.role !== "system"));
-  if (messages.length <= keep) return messages;
-
-  let start = messages.length - keep;
-  // The kept slice must begin at a user turn so no tool result is left without its call.
-  while (start < messages.length && messages[start]?.role !== "user") start++;
-  if (start >= messages.length) start = messages.length - keep;
+  let start = messages.length <= keep ? 0 : nextUserTurn(messages, messages.length - keep);
+  // Large tool results can blow the context long before the message count does.
+  while (start < messages.length - 1 && charSize(messages.slice(start)) > maxChars) {
+    const next = nextUserTurn(messages, start + 1);
+    if (next >= messages.length || next === start) break;
+    start = next;
+  }
+  if (start <= 0) return messages;
 
   const older = messages.slice(0, start);
   const summary: AgentMessage = {
@@ -666,6 +885,36 @@ export function restoreMessages(stored: AgentMessage[], now: Date, keep = SESSIO
     timestamp: now.getTime(),
   };
   return [summary, ...messages.slice(start)];
+}
+
+/**
+ * The live context before a model call: the system message stays, the rest is folded like
+ * a restore. The fold leaves room for the turn about to be added, so the transcript never
+ * sits above SESSION_KEEP_MESSAGES + 2 (system message and summary) between turns.
+ */
+export function trimContext(messages: AgentMessage[], now: Date): AgentMessage[] {
+  const system = messages.filter((m) => m.role === "system");
+  const rest = restoreMessages(messages, now, SESSION_KEEP_MESSAGES - 2);
+  return system.length ? [...system, ...rest] : rest;
+}
+
+/** The kept slice must begin at a user turn so no tool result is left without its call. */
+function nextUserTurn(messages: AgentMessage[], from: number): number {
+  let i = from;
+  while (i < messages.length && messages[i]?.role !== "user") i++;
+  return i >= messages.length ? from : i;
+}
+
+function charSize(messages: AgentMessage[]): number {
+  let total = 0;
+  for (const m of messages) {
+    try {
+      total += JSON.stringify(m).length;
+    } catch {
+      total += 1000;
+    }
+  }
+  return total;
 }
 
 function dropOrphanToolCalls(messages: AgentMessage[]): AgentMessage[] {
@@ -769,6 +1018,21 @@ function askedCapability(principal: Principal, meta: ToolMeta): Capability {
   return meta.capabilities[0] ?? "converse";
 }
 
+/** JSON with sorted keys, so two equal argument objects always hash the same. */
+export function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const o = value as Record<string, unknown>;
+  const keys = Object.keys(o)
+    .filter((k) => o[k] !== undefined)
+    .sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(o[k])}`).join(",")}}`;
+}
+
+export function hashArgs(args: unknown): string {
+  return createHash("sha256").update(stableJson(args ?? {})).digest("hex").slice(0, 16);
+}
+
 function approvalText(approval: Approval, requester: Principal, config: InstinctConfig): string {
   const who = requester.kind === "owner" ? "" : ` (asked by ${requester.displayName})`;
   const amount = approval.amountUsd !== undefined ? ` ($${approval.amountUsd.toFixed(2)})` : "";
@@ -779,14 +1043,68 @@ function untrustedLabel(msg: InboundMessage, principal: Principal): string {
   return `${msg.channel} from ${principal.displayName} (${principal.kind}, tier ${principal.tier})`;
 }
 
+/** One line per attachment. Names, types and links are sender-controlled, so they are flattened to one line each. */
 function withAttachments(text: string, msg: InboundMessage): string {
   if (!msg.attachments?.length) return text;
-  const lines = msg.attachments.map((a) => `[attachment${a.name ? ` ${a.name}` : ""}${a.mimeType ? ` ${a.mimeType}` : ""}${a.path ? ` path=${a.path}` : a.url ? ` url=${a.url}` : ""}]`);
+  const flat = (v: string | undefined, max: number) => (v ? clip(v.replace(/[\r\n\[\]]+/g, " ").trim(), max) : "");
+  const lines = msg.attachments.map((a) => {
+    const name = flat(a.name, 200);
+    const type = flat(a.mimeType, 80);
+    const where = a.path ? ` path=${flat(a.path, 300)}` : a.url ? ` url=${flat(a.url, 500)}` : "";
+    return `[attachment${name ? ` ${name}` : ""}${type ? ` ${type}` : ""}${where}]`;
+  });
   return `${text}\n${lines.join("\n")}`;
 }
 
+const DATA_PART_CAP = 6_000;
+
+/** The structured data part of an A2A message, described when a describer is wired and always dumped as JSON. */
+function withData(text: string, msg: InboundMessage, describe: RuntimeDeps["describeData"]): string {
+  if (!msg.data || typeof msg.data !== "object") return text;
+  const parts: string[] = [];
+  if (describe) {
+    try {
+      const described = describe(msg.data);
+      if (described?.trim()) parts.push(described.trim());
+    } catch {
+      // A describer that throws must not drop the message.
+    }
+  }
+  let json: string;
+  try {
+    json = JSON.stringify(msg.data);
+  } catch {
+    json = "(unserializable data part)";
+  }
+  parts.push(`Structured data part (OIP):\n${clip(json, DATA_PART_CAP)}`);
+  return `${text}\n\n${parts.join("\n")}`.trim();
+}
+
 function ackText(channel: Channel): string {
-  return channel === "email" ? "Got it. I am on it and will reply by email when done." : "On it. I will text you when it is done.";
+  switch (channel) {
+    case "email":
+      return "Got it. I am on it and will reply by email when done.";
+    case "chat":
+      return "On it. This is taking a moment; send another message in a bit and I will have the answer here.";
+    case "a2a":
+      return "Working on it.";
+    default:
+      return "On it. I will text you when it is done.";
+  }
+}
+
+function isGroup(msg: InboundMessage): boolean {
+  return msg.meta?.isGroup === true;
+}
+
+/**
+ * The runtime key for a message. A 1:1 thread is its own key. A group thread gets one key
+ * per principal, so each participant has their own Agent and transcript while replies
+ * still land in the shared thread.
+ */
+export function runtimeKey(msg: InboundMessage, principal: Principal): string {
+  if (!isGroup(msg)) return msg.conversationKey;
+  return `${msg.conversationKey}:${principal.id}`;
 }
 
 function channelOf(key: string): Channel {

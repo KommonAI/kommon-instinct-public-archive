@@ -152,15 +152,50 @@ export function connectCommandFor(handle: string): string {
   return `connect @${handle}`;
 }
 
+/** The `sms:` link that opens Messages with this handle's connect command filled in. */
+export function smsHrefFor(number: string, handle: string): string {
+  return `sms:${number}&body=${encodeURIComponent(connectCommandFor(handle))}`;
+}
+
+/**
+ * True when router info was produced for this handle, so its QR can be shown.
+ * The org-wide triage endpoint returns a placeholder ("connect @handle"); its QR
+ * would connect the wrong identity.
+ */
+export function routerInfoIsFor(info: RouterInfo, handle: string): boolean {
+  const want = connectCommandFor(handle).toLowerCase();
+  if (info.connectCommand.trim().toLowerCase() === want) return true;
+  try {
+    return decodeURIComponent(info.smsLink).toLowerCase().includes(want);
+  } catch {
+    return false;
+  }
+}
+
+/** What the connect page needs: the number for everyone, a QR only when it is this user's. */
+export interface ConnectRouter {
+  number: string;
+  qrPngDataUrl?: string;
+}
+
+export function connectRouterFor(handle: string, shared: RouterInfo | undefined, perUser: RouterInfo | undefined): ConnectRouter | undefined {
+  const number = perUser?.number || shared?.number;
+  if (!number) return undefined;
+  const source = perUser && routerInfoIsFor(perUser, handle) ? perUser : shared && routerInfoIsFor(shared, handle) ? shared : undefined;
+  const out: ConnectRouter = { number };
+  if (source?.qrPngDataUrl) out.qrPngDataUrl = source.qrPngDataUrl;
+  return out;
+}
+
 function statusPill(u: UserRecord): string {
   if (u.status === "ready") return `<span class="pill ok"><i></i>Ready</span>`;
   if (u.status === "error") return `<span class="pill bad"><i></i>Setup failed</span>`;
   return `<span class="pill warn"><i></i>Setting up</span>`;
 }
 
-export function renderConnect(user: UserRecord, router: RouterInfo | undefined): string {
+export function renderConnect(user: UserRecord, router: ConnectRouter | undefined): string {
   const command = connectCommandFor(user.handle);
-  const smsHref = router ? safeUrl(router.smsLink) || safeUrl(`sms:${router.number}&body=${encodeURIComponent(command)}`) : "";
+  const smsHref = router ? safeUrl(smsHrefFor(router.number, user.handle)) : "";
   const qr = router ? safeUrl(router.qrPngDataUrl, true) : "";
   const provisioning = user.status === "provisioning";
 
@@ -197,6 +232,41 @@ ${qr ? `<p class="hint" style="text-align:center;margin-top:22px">Or scan from a
 </ol>
 <p class="hint">Bookmark this page: <a href="/connect/${encodeURIComponent(user.id)}">/connect/${escapeHtml(user.id)}</a></p>`,
     { refreshSeconds: provisioning ? 5 : undefined },
+  );
+}
+
+/**
+ * Shown when the phone or handle already belongs to a record. It says the same
+ * thing whether or not an account exists, so the form cannot be used to check
+ * who has an Instinct. The connect command is built from what the caller typed.
+ */
+export function renderPending(handle: string, router: ConnectRouter | undefined): string {
+  const command = connectCommandFor(handle);
+  const smsHref = router ? safeUrl(smsHrefFor(router.number, handle)) : "";
+  const routerBlock = router
+    ? `<p class="hint" style="margin-top:18px">Text this from the phone you entered</p>
+<div class="code"><span>${escapeHtml(command)}</span></div>
+<p class="hint">to <b>${escapeHtml(router.number)}</b></p>
+${smsHref ? `<a class="btn" href="${smsHref}">Open Messages with it filled in</a>` : ""}`
+    : "";
+  return layout(
+    "Check your phone",
+    `<h1>Check your phone.</h1>
+<p class="lead">If this number is new here, your Instinct is being set up. If it already has one, nothing changed.</p>
+<div class="card">
+  <p class="hint">Setup takes about a minute. Your Instinct replies on iMessage once it is ready. If you saved a connect link earlier, keep using that one.</p>
+  ${routerBlock}
+</div>`,
+  );
+}
+
+/** Landing page after the Link OAuth redirect. The agent finishes the exchange; the person goes back to Messages. */
+export function renderLinkDone(ok: boolean): string {
+  return layout(
+    ok ? "Connected" : "Not connected",
+    ok
+      ? `<h1>Connected.</h1><div class="card"><p>Your Link wallet is on its way to your Instinct. Go back to your messages; it will confirm there.</p></div>`
+      : `<h1>Not connected.</h1><div class="card"><div class="error">The wallet connection could not be handed to your Instinct right now. Ask it to try again from your messages.</div></div>`,
   );
 }
 

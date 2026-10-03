@@ -107,15 +107,18 @@ function clone<T>(v: T): T {
   return structuredClone(v);
 }
 
-/** Strip anything a browser or a log line must not see. */
+/**
+ * Strip anything a browser or a log line must not see. The name and the
+ * provisioning error text stay out too: the id can leak, and this JSON must not
+ * turn a leaked id into a profile.
+ */
 export function publicUser(u: UserRecord): Record<string, unknown> {
   return {
     id: u.id,
-    name: u.name,
     handle: u.handle,
     phoneMasked: maskPhone(u.phone),
     status: u.status,
-    error: u.error,
+    hasError: u.status === "error",
     hasAgent: Boolean(u.maritimeAgentId),
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,

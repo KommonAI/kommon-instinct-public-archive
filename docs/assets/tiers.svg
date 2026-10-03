@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620" font-family="Atkinson Hyperlegible, Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <style>
+    .ring { stroke: #1F2937; stroke-width: 1.5; }
+    .t { font-size: 18px; font-weight: 700; fill: #111827; }
+    .s { font-size: 14px; fill: #374151; }
+    .h { font-size: 24px; font-weight: 700; fill: #111827; }
+    .row { font-size: 15px; fill: #111827; }
+    .muted { font-size: 14px; fill: #6B7280; font-style: italic; }
+  </style>
+  <rect width="1100" height="620" fill="#FFFFFF"/>
+  <text x="40" y="44" class="h">Trust tiers: keys to your house</text>
+  <text x="40" y="70" class="muted">Each person gets one tier. Each tier is a fixed set of keys. The owner can hand out extra, time-limited keys (grants).</text>
+
+  <!-- rings, centered at (300, 360) -->
+  <circle cx="300" cy="360" r="230" fill="#F3F4F6" class="ring"/>
+  <circle cx="300" cy="360" r="190" fill="#E5E7EB" class="ring"/>
+  <circle cx="300" cy="360" r="150" fill="#D1FAE5" class="ring"/>
+  <circle cx="300" cy="360" r="110" fill="#A7F3D0" class="ring"/>
+  <circle cx="300" cy="360" r="72" fill="#6EE7B7" class="ring"/>
+  <circle cx="300" cy="360" r="36" fill="#0F766E" class="ring"/>
+  <text x="300" y="366" text-anchor="middle" class="t" fill="#FFFFFF" style="fill:#FFFFFF">owner</text>
+  <text x="300" y="306" text-anchor="middle" class="t">partner</text>
+  <text x="300" y="268" text-anchor="middle" class="t">family</text>
+  <text x="300" y="228" text-anchor="middle" class="t">friend</text>
+  <text x="300" y="188" text-anchor="middle" class="t">contact</text>
+  <text x="300" y="148" text-anchor="middle" class="t">stranger</text>
+
+  <!-- legend table -->
+  <g transform="translate(590, 110)">
+    <text x="0" y="0" class="t">Tier</text>
+    <text x="150" y="0" class="t">Can do by default</text>
+    <line x1="0" y1="12" x2="470" y2="12" stroke="#9CA3AF"/>
+
+    <text x="0" y="46" class="row">owner</text>
+    <text x="150" y="46" class="row">everything, inside the spend limits you set</text>
+
+    <text x="0" y="90" class="row">partner</text>
+    <text x="150" y="90" class="row">read your calendar, propose and hold plans,</text>
+    <text x="150" y="112" class="row">book with your approval, see your location</text>
+
+    <text x="0" y="156" class="row">family</text>
+    <text x="150" y="156" class="row">see free/busy, coordinate plans, rough location</text>
+
+    <text x="0" y="200" class="row">friend</text>
+    <text x="150" y="200" class="row">see free/busy, propose plans, get a yes or no</text>
+
+    <text x="0" y="244" class="row">contact</text>
+    <text x="150" y="244" class="row">converse, leave you a message, public facts</text>
+
+    <text x="0" y="288" class="row">stranger</text>
+    <text x="150" y="288" class="row">one introduction, leave a message, rate limited</text>
+
+    <line x1="0" y1="316" x2="470" y2="316" stroke="#9CA3AF"/>
+    <text x="0" y="350" class="s">"ask" = your agent texts you a one-line approval first.</text>
+    <text x="0" y="374" class="s">Out-of-scope requests are declined and reported to you.</text>
+    <text x="0" y="398" class="s">Grants: "Sam can book us dinner this week" adds a key that expires.</text>
+  </g>
+</svg>

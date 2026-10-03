@@ -3,7 +3,7 @@
  * them. Stored as a plain JSON array in contacts.json so the owner can edit it.
  */
 import type { StateDir } from "./state.js";
-import { normalizeEmail, normalizeHandle, normalizePhone } from "./principal.js";
+import { isReservedHandle, normalizeEmail, normalizeHandle, normalizePhone } from "./principal.js";
 import type { Contact, Tier } from "./types.js";
 
 const FILE = "contacts.json";
@@ -103,6 +103,9 @@ export class ContactStore {
     const phones = uniq((input.phones ?? []).map(normalizePhone));
     const emails = uniq((input.emails ?? []).map(normalizeEmail));
     const handle = input.agentHandle ? normalizeHandle(input.agentHandle) : undefined;
+    if (handle !== undefined && isReservedHandle(handle)) {
+      throw new Error(`"${handle}" is a reserved handle and cannot belong to a contact's agent`);
+    }
 
     const existing =
       (input.id ? list.find((c) => c.id === input.id) : undefined) ??

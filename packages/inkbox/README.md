@@ -46,6 +46,14 @@ await admin.enableA2A(id.handle);
 if it was off). A taken handle gets `-2`, `-3` suffixes. A plan limit (HTTP 402) throws
 `InkboxPlanLimitError` with the console billing URL. A phone-inventory 429 retries without a number.
 
+### Rate limits
+
+Every REST call this package makes (`createRest`) follows the SDK's own send policy: a 429, 502,
+503 or 504 is retried up to two more times when `Retry-After` is 5 s or less (or absent, for the
+5xx codes), waiting `max(Retry-After, 250ms * 2^attempt)`. A 429 with no `Retry-After` is a quota
+and is thrown at once. The thrown `InkboxHttpError` carries `retryAfterSeconds` (number or null) so
+callers can tell the model how long to wait.
+
 ## The iMessage router and the connect flow
 
 iMessage does not let an arbitrary server own a phone number. Inkbox runs a shared
@@ -70,6 +78,17 @@ Subscribe once per identity. The default event list is:
 imessage.received, imessage.reaction_received, text.received, message.received,
 a2a.task.created, a2a.task.message, a2a.task.canceled, a2a.sent_task.updated
 ```
+
+`parseInkboxEvent` turns each of these into an `InboundMessage`; delivery lifecycle events
+(`*.sent`, `*.delivered`, `*.bounced`, `*.failed`) return `undefined`. The two A2A lifecycle
+events matter for the caller side of a conversation:
+
+- `a2a.sent_task.updated` is the peer's progress or answer on a task we sent. `from` is the peer
+  (`data.sender`, never our own `caller`), the text is the joined text parts or `[<state>]` when
+  the update is a bare state change, `data` is the first data part (the OIP reply), and
+  `meta.direction` is `"sent"`. The conversation key stays `a2a:<context_id>`.
+- `a2a.task.canceled` becomes `[task <id> canceled by @<caller>]` in the same conversation so the
+  model stops working on it.
 
 Every delivery is signed. Verify before parsing:
 
@@ -111,8 +130,12 @@ on the conversation key:
 | `imessage:<id>` | `sendIMessage({ conversationId })`, split over 1500 characters into several bubbles |
 | `imessage` with `to` and no key | `sendIMessage({ to })` (dedicated line) |
 | `sms:<E.164>` or `to` | `sendText({ to })` |
-| `email:<thread>` | `sendEmail` with `Re: <subject>` and `inReplyToMessageId` from `replyRef`; call `channel.remember(inbound)` so a reply with no `to` reaches the last sender |
-| `a2a:<ctx>` with `msg.a2a` | `a2aReply(taskId, { intent, parts })` |
+| `email:<thread>` | `sendEmail` with `Re: <subject>` and `inReplyToMessageId` from `replyRef`; the recipient is `to`, else `replyRef.from` (the inbound sender, which `parseInkboxEvent` records), else what `channel.remember(inbound)` saw |
+| `a2a:<ctx>` | `a2aReply(taskId, { intent, parts })`; the task id comes from `msg.a2a`, else `replyRef.taskId`, else `remember()`; the intent defaults to `complete` |
+
+The runtime attaches the inbound message's `replyRef` to the outbound it builds from a reply, so
+email and A2A answers need no extra bookkeeping. `remember()` stays as the fallback for callers
+that send without one (`send_message` with no `to`, for example).
 
 ```ts
 const channel = new InkboxChannel({ apiKey: process.env.INKBOX_API_KEY!, handle: "maria-instinct" });

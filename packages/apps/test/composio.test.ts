@@ -149,7 +149,7 @@ describe("ComposioApps.tools", () => {
     expect(tools.map((t) => [t.spec.name, t.spec.meta.capabilities])).toEqual([
       ["app_gmail_fetch_emails", ["email.read"]],
       ["app_googlecalendar_create_event", ["calendar.write"]],
-      ["app_composio_manage_connections", ["apps.use"]],
+      ["app_composio_manage_connections", ["apps.use", "trust.manage"]],
     ]);
     expect(tools.every((t) => t.spec.meta.group === "apps")).toBe(true);
     expect(await apps.tools()).toBe(tools);

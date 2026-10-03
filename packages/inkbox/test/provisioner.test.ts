@@ -67,7 +67,7 @@ describe("InkboxProvisioner.provisionIdentity", () => {
     expect((err as Error).message).toContain(`${BASE}/console/billing`);
   });
 
-  it("retries without a phone number when the phone request is rate limited", async () => {
+  it("retries without a phone number when the phone request is rate limited (a quota 429 has no Retry-After and is not retried as such)", async () => {
     const fake = fakeFetch({
       "GET /api/v1/identities/sam-instinct": { status: 404 },
       "POST /api/v1/identities/": (req: Recorded) => {
@@ -131,7 +131,9 @@ describe("InkboxProvisioner: keys, webhooks, router, A2A", () => {
     await p.enableA2A("maria-instinct");
     await p.addContactRule("maria-instinct", "@sam-instinct");
     expect(fake.calls[0]?.body).toEqual({ enabled: true });
-    expect(fake.calls[1]?.body).toEqual({ handle: "sam-instinct", action: "allow", direction: "both" });
+    // Same wire shape as the SDK's A2AResource.addContactRule; `handle` is not a wire field.
+    expect(fake.calls[1]?.body).toEqual({ action: "allow", match_type: "handle", match_target: "sam-instinct", direction: "both" });
+    expect(fake.calls[1]?.body).not.toHaveProperty("handle");
   });
 
   it("creates an invitation and deletes identities idempotently", async () => {

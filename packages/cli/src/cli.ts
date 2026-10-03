@@ -12,6 +12,7 @@ import { runDeploy } from "./commands/deploy.js";
 import { runDev } from "./commands/dev.js";
 import { runInit } from "./commands/init.js";
 import { runInvite } from "./commands/invite.js";
+import { runPayments } from "./commands/payments.js";
 import { runSchedules } from "./commands/schedules.js";
 import { runStatus } from "./commands/status.js";
 import { runTrust } from "./commands/trust.js";
@@ -30,9 +31,26 @@ const COMMANDS: Record<string, Command> = {
   invite: runInvite,
   trust: runTrust,
   schedules: runSchedules,
+  payments: runPayments,
 };
 
 export const COMMAND_NAMES: readonly string[] = Object.keys(COMMANDS);
+
+/** Commands whose promise resolves while the process must stay up (a listening server). */
+const LONG_RUNNING = new Set(["dev"]);
+
+/**
+ * True when the invocation starts a server the binary must not exit from.
+ * `--data-dir` may precede the command word, so the raw argv index is not enough.
+ */
+export function keepsRunning(argv: string[]): boolean {
+  try {
+    const command = extractDataDir(argv).argv[0];
+    return command !== undefined && LONG_RUNNING.has(command);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Runs one invocation. `argv` excludes the node binary and script path.

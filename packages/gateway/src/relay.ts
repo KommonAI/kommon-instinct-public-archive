@@ -131,6 +131,18 @@ export async function relayEvent(user: UserRecord, rawBody: Buffer, headers: Hea
   return result;
 }
 
+/**
+ * Hand an event the gateway built itself (not an Inkbox webhook) to the user's
+ * agent through the same Maritime /chat path. Used for OAuth callbacks.
+ */
+export async function relayGatewayEvent(user: UserRecord, event: Record<string, unknown>, conversationId: string, deps: RelayDeps): Promise<RelayResult> {
+  const log = deps.logger ?? silentLogger;
+  if (!user.maritimeAgentId) return { status: "ignored", reason: "agent not provisioned" };
+  const result = await postChat(user.maritimeAgentId, { message: encodeEvent(event), conversation_id: conversationId }, deps);
+  log.info("relay.result", { userId: user.id, eventType: String(event["type"] ?? "gateway"), ...result });
+  return result;
+}
+
 async function postChat(agentId: string, body: { message: string; conversation_id: string }, deps: RelayDeps): Promise<RelayResult> {
   const f = deps.fetchImpl ?? globalThis.fetch;
   const base = (deps.maritime.baseUrl ?? DEFAULT_MARITIME_BASE_URL).replace(/\/+$/, "");

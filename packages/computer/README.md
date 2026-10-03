@@ -51,6 +51,16 @@ Maritime key is present, use the hosted MCP (the URL defaults to `https://mcp.ma
 otherwise run without a computer. `desktopd` and `maritime` force one backend; `maritime` throws
 when the URL or key is missing so a misconfigured deployment fails at boot, not mid-task.
 
+Cold boots. Maritime launches the desktop stack in the background and starts the agent at
+once, so on a fresh VM desktopd is usually not listening yet when `detectComputer` runs. Pass
+`expectDesktopd: true` (the server sets it from `MARITIME_DESKTOP=1`) and the probe is retried
+with backoff (1 s, 2 s, 4 s, then every 5 s) for up to `desktopdWaitMs` (default 60 s). If it
+still has not answered, `auto` keeps the desktopd backend anyway: the platform said there is a
+desktop, and the client turns an unreachable server into tool errors until it is up. Mode
+`desktopd` always waits the full budget. Plain `auto` without the flag keeps the single fast probe,
+so a laptop without a desktop boots in milliseconds. `waitForDesktopd` is exported for callers that
+want the poll on its own.
+
 `computerGuidance()` returns a short system prompt section: the screenshot, act, verify loop,
 the 1200 px frame, and when to call `request_takeover`.
 
@@ -126,5 +136,5 @@ MCP server built on `@earendil-works/pi-mcp/testing`. Nothing touches the networ
   supervise and lets `request_takeover` return without blocking.
 - Hosted tool names are kept verbatim. A `computer_` prefix would make the two backends diverge
   and break prompts that Maritime's own docs teach.
-- Only types are imported from `@open-instinct/core`. The tool objects match `RegisteredTool`
-  structurally, so this package builds and tests on its own.
+- Tools are built with core's `defineTool` and `textResult`, so the shape is the one the
+  ToolRegistry expects by construction. Build core first (`pnpm --filter @open-instinct/core build`).

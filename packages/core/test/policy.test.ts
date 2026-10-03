@@ -151,6 +151,9 @@ describe("PolicyEngine spend limits (owner, limit permission)", () => {
     policy.spend.allowedMerchants = ["uber", "doordash"];
     const engine = new PolicyEngine(policy);
     expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchant: "Lucky Casino" }).outcome).toBe("deny");
+    // Blocked merchants are blocked for everyone, including tiers that would otherwise ask.
+    expect(engine.evaluate(principalOf("partner"), purchaseMeta, { amountUsd: 10, merchant: "Lucky Casino" }).outcome).toBe("deny");
+    expect(engine.evaluate(principalOf("partner"), purchaseMeta, { amountUsd: 10, merchant: "Uber" }).outcome).toBe("ask");
     expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchant: "Uber" }).outcome).toBe("allow");
     expect(engine.evaluate(owner, purchaseMeta, { amountUsd: 10, merchant: "Amazon" }).outcome).toBe("ask");
   });
@@ -183,13 +186,57 @@ describe("PolicyEngine grants", () => {
 
   it("respects maxUsd: within cap allows, over cap falls back to the tier default", () => {
     const engine = new PolicyEngine(defaultPolicy(), { now: () => now });
-    engine.addGrant({ to: "contact:sam", capabilities: ["purchase"], scope: { maxUsd: 150 } });
-    expect(engine.evaluate(friend, purchaseMeta, { amountUsd: 100 }).outcome).toBe("allow");
+    const g = engine.addGrant({ to: "contact:sam", capabilities: ["purchase"], scope: { maxUsd: 150 } });
+    const ok = engine.evaluate(friend, purchaseMeta, { amountUsd: 100 });
+    expect(ok.outcome).toBe("allow");
+    if (ok.outcome === "allow") expect(ok.viaGrant).toBe(g.id);
     expect(engine.evaluate(friend, purchaseMeta, { amountUsd: 200 }).outcome).toBe("deny");
     const partner = principalOf("partner", { id: "contact:sam", contactId: "sam" });
     const d = engine.evaluate(partner, purchaseMeta, { amountUsd: 200 });
     expect(d.outcome).toBe("ask");
     if (d.outcome === "ask") expect(d.reason).toMatch(/exceeds grant/);
+  });
+
+  it("keeps the spend policy in force under a spend grant", () => {
+    const policy = defaultPolicy();
+    policy.spend.blockedMerchants = ["casino"];
+    const engine = new PolicyEngine(policy, { now: () => now, spentTodayUsd: () => 250 });
+    engine.addGrant({ to: "contact:sam", capabilities: ["purchase", "travel.book"], scope: { maxUsd: 150 } });
+
+    // Blocked merchants stay blocked, even for a grantee.
+    expect(engine.evaluate(friend, purchaseMeta, { amountUsd: 20, merchant: "Lucky Casino" }).outcome).toBe("deny");
+    // Flights and hotels always ask.
+    const flights = engine.evaluate(friend, { ...purchaseMeta, capabilities: ["travel.book"] }, { amountUsd: 90, item: "flights to Lisbon" });
+    expect(flights.outcome).toBe("ask");
+    if (flights.outcome === "ask") {
+      expect(flights.reason).toMatch(/flights/);
+      expect(flights.approvalPrompt).toContain("Sam asks");
+    }
+    // An unknown amount is never a free pass.
+    const unknown = engine.evaluate(friend, purchaseMeta, { item: "mystery" });
+    expect(unknown.outcome).toBe("ask");
+    if (unknown.outcome === "ask") expect(unknown.reason).toMatch(/amount unknown/);
+    // The daily total still counts.
+    const daily = engine.evaluate(friend, purchaseMeta, { amountUsd: 80, item: "dinner" });
+    expect(daily.outcome).toBe("ask");
+    if (daily.outcome === "ask") expect(daily.reason).toMatch(/daily limit/);
+    // Over the owner's per-action limit asks even when under the grant cap.
+    const big = new PolicyEngine(policy, { now: () => now });
+    expect(big.addGrant({ to: "contact:sam", capabilities: ["purchase"], scope: { maxUsd: 500 } }).id).toMatch(/^g_/);
+    const perAction = big.evaluate(friend, purchaseMeta, { amountUsd: 120, item: "speaker" });
+    expect(perAction.outcome).toBe("ask");
+    if (perAction.outcome === "ask") expect(perAction.reason).toMatch(/per-action/);
+    // Inside every limit: allowed, and attributed to the grant.
+    const fine = new PolicyEngine(policy, { now: () => now, spentTodayUsd: () => 10 });
+    const g = fine.addGrant({ to: "contact:sam", capabilities: ["purchase"], scope: { maxUsd: 150 } });
+    const d = fine.evaluate(friend, purchaseMeta, { amountUsd: 80, item: "dinner", merchant: "Nopa" });
+    expect(d.outcome).toBe("allow");
+    if (d.outcome === "allow") expect(d.viaGrant).toBe(g.id);
+    // A grant without a cap uses the owner's own ask threshold.
+    const uncapped = new PolicyEngine(policy, { now: () => now });
+    uncapped.addGrant({ to: "contact:sam", capabilities: ["purchase"] });
+    expect(uncapped.evaluate(friend, purchaseMeta, { amountUsd: 20, item: "coffee" }).outcome).toBe("allow");
+    expect(uncapped.evaluate(friend, purchaseMeta, { amountUsd: 75, item: "shoes" }).outcome).toBe("ask");
   });
 
   it("ignores expired grants and grants outside their window", () => {

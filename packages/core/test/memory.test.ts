@@ -63,4 +63,18 @@ describe("MemoryStore", () => {
     expect(d).not.toContain("event number 0\n");
     expect(d).toContain("...");
   });
+
+  it("extracts only the Preferences section for people who may know preferences", () => {
+    const store = new MemoryStore(tempState());
+    expect(store.preferencesDigest()).toBe("");
+    store.appendDurable("Maria's bank is Mercury, account ending 4421.");
+    expect(store.preferencesDigest()).toBe(""); // no section, nothing leaks
+    store.replaceDurable(["# Memory", "", "Bank: Mercury 4421.", "", "## Preferences", "- Window seats.", "- No shellfish.", "", "## People", "- Sam is her partner."].join("\n"));
+    const d = store.preferencesDigest();
+    expect(d).toContain("Window seats");
+    expect(d).toContain("No shellfish");
+    expect(d).not.toContain("Mercury");
+    expect(d).not.toContain("Sam");
+    expect(store.preferencesDigest(20).length).toBeLessThanOrEqual(24);
+  });
 });

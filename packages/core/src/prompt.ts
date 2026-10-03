@@ -2,6 +2,7 @@
  * System prompt builder. The prompt is assembled from the config, the principal and the
  * current state so it can be rebuilt before every run. Nothing secret goes in here.
  */
+import { OWNER_EMAIL_PRINCIPAL_ID } from "./principal.js";
 import type { Approval, Capability, Channel, InstinctConfig, Principal, Tier } from "./types.js";
 
 export interface PromptInput {
@@ -60,7 +61,7 @@ function ownerSection({ config, principal }: PromptInput): string {
   const lines = [`# Your owner`, `Name: ${o.name}.`];
   if (o.city) lines.push(`City: ${o.city}.`);
   lines.push(`Timezone: ${o.timezone}.`);
-  if (principal.kind === "owner") {
+  if (principal.kind === "owner" && principal.tier === "owner") {
     if (o.phones.length) lines.push(`Phones: ${o.phones.join(", ")}.`);
     if (o.emails.length) lines.push(`Emails: ${o.emails.join(", ")}.`);
     if (o.about?.trim()) lines.push(`About ${o.name}: ${o.about.trim()}`);
@@ -76,10 +77,22 @@ function principalSection({ principal, capabilities, toolGroups, config }: Promp
   const lines = [`# Who you are talking to`];
   switch (principal.kind) {
     case "owner":
-      lines.push(`This is ${config.owner.name}, your owner. Tier: owner. Do what they ask within the spend policy. Confirm before spending money or booking travel.`);
+      if (principal.cappedFrom && principal.tier !== "owner") {
+        lines.push(
+          `This is ${config.owner.name}, your owner, speaking in a group thread that other people can read. Tier: ${principal.tier} (capped from owner because every reply is visible to everyone in the group). Share only what tier ${principal.tier} may see and do only what it may do; for anything private, tell ${config.owner.name} to message you directly.`,
+        );
+      } else {
+        lines.push(`This is ${config.owner.name}, your owner. Tier: owner. Do what they ask within the spend policy. Confirm before spending money or booking travel.`);
+      }
       break;
     case "contact":
-      lines.push(`${principal.displayName}, a person your owner knows. Tier: ${principal.tier}. ${tierBlurb(principal.tier)}`);
+      if (principal.id === OWNER_EMAIL_PRINCIPAL_ID) {
+        lines.push(
+          `Email from ${config.owner.name}'s own address. Tier: ${principal.tier}, not owner, because email senders cannot be verified. ${tierBlurb(principal.tier)} Approvals cannot be given by email; anything that needs ${config.owner.name}'s say-so is confirmed by text.`,
+        );
+      } else {
+        lines.push(`${principal.displayName}, a person your owner knows. Tier: ${principal.tier}. ${tierBlurb(principal.tier)}`);
+      }
       break;
     case "agent":
       lines.push(

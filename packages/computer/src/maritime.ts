@@ -17,7 +17,7 @@ import {
 import type { RegisteredTool, ToolMeta, ToolResultLike } from "@open-instinct/core";
 import { errorResult, findStringField, isRecord, mcpResultToToolResult } from "./result.js";
 import { mcpSchemaToTypeBox, sanitizeToolName, schemaHasProperty } from "./schema.js";
-import { defineTool } from "./tool.js";
+import { defineTool } from "@open-instinct/core";
 import type { ComputerBackend, Logger } from "./types.js";
 
 export const DEFAULT_MARITIME_MCP_URL = "https://mcp.maritime.sh";

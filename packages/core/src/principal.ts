@@ -2,6 +2,13 @@
  * Who is talking. Every inbound message is resolved to a Principal before the
  * model sees it. The resolution order is fixed: owner identifiers in config,
  * then contacts.json, then the A2A caller handle, then stranger.
+ *
+ * Trust boundary: the owner is recognised in full only where the sender identity is
+ * bound to the carrier or to the process (iMessage and SMS from the owner's phone, the
+ * local chat endpoint, scheduled and system runs). An email whose From matches the owner
+ * is reduced to the `owner:email` principal at tier partner, because a From header can be
+ * forged and the mail webhook carries no SPF/DKIM/DMARC result. The literal sender
+ * `owner` is never a sentinel on a network channel.
  */
 import type { ContactStore } from "./contacts.js";
 import type { Contact, InboundMessage, InstinctConfig, Principal } from "./types.js";
@@ -32,6 +39,22 @@ export function looksLikePhone(s: string): boolean {
   return /^\+?[\d\s().-]{7,}$/.test(t) && t.replace(/\D/g, "").length >= 7;
 }
 
+/** Principal id for the owner writing by email: recognised, but not trusted as the owner. */
+export const OWNER_EMAIL_PRINCIPAL_ID = "owner:email";
+
+/** Tier the owner's email address gets. Partner excludes bash, files, computer, email.read and memory. */
+export const OWNER_EMAIL_TIER = "partner";
+
+/** Channels where a message from the owner's address really is the owner. */
+export const OWNER_VERIFIED_CHANNELS: ReadonlySet<InboundMessage["channel"]> = new Set(["imessage", "sms", "chat", "scheduled", "system"]);
+
+/** Handles that must never be registered or honoured as an agent handle. */
+export const RESERVED_HANDLES: ReadonlySet<string> = new Set(["owner"]);
+
+export function isReservedHandle(handle: string): boolean {
+  return RESERVED_HANDLES.has(normalizeHandle(handle));
+}
+
 export function ownerPrincipalOf(config: InstinctConfig): Principal {
   const p: Principal = {
     kind: "owner",
@@ -44,6 +67,17 @@ export function ownerPrincipalOf(config: InstinctConfig): Principal {
   const email = config.owner.emails[0];
   if (email) p.email = email;
   return p;
+}
+
+/** The owner's own email address: known, but email identity is unverified, so the tier is reduced. */
+function ownerByEmailPrincipal(config: InstinctConfig, email: string): Principal {
+  return {
+    kind: "contact",
+    id: OWNER_EMAIL_PRINCIPAL_ID,
+    tier: OWNER_EMAIL_TIER,
+    displayName: `${config.owner.name} (by email, unverified)`,
+    email,
+  };
 }
 
 function contactPrincipal(c: Contact): Principal {
@@ -88,21 +122,22 @@ function strangerPrincipal(msg: InboundMessage, address: string): Principal {
 export function resolvePrincipal(msg: InboundMessage, config: InstinctConfig, contacts: ContactStore): Principal {
   const from = (msg.from ?? "").trim();
 
-  // Dashboard chat, scheduled jobs and system events are always the owner speaking.
-  if (msg.channel === "chat" || msg.channel === "scheduled" || msg.channel === "system" || from === "owner") {
+  // Dashboard chat, scheduled jobs and system events are always the owner speaking. These
+  // channels are process-local; the literal sender "owner" means nothing anywhere else.
+  if (msg.channel === "chat" || msg.channel === "scheduled" || msg.channel === "system") {
     return ownerPrincipalOf(config);
   }
 
   if (msg.channel === "a2a") {
     const handle = normalizeHandle(from);
-    const contact = contacts.findByHandle(handle);
+    const contact = isReservedHandle(handle) ? undefined : contacts.findByHandle(handle);
     if (contact) return agentPrincipal(contact, handle);
     return strangerPrincipal(msg, handle);
   }
 
   if (looksLikeEmail(from)) {
     const email = normalizeEmail(from);
-    if (config.owner.emails.some((e) => normalizeEmail(e) === email)) return ownerPrincipalOf(config);
+    if (config.owner.emails.some((e) => normalizeEmail(e) === email)) return ownerByEmailPrincipal(config, email);
     const contact = contacts.findByEmail(email);
     if (contact) return contactPrincipal(contact);
     return strangerPrincipal(msg, email);
@@ -119,7 +154,7 @@ export function resolvePrincipal(msg: InboundMessage, config: InstinctConfig, co
   // Something we do not recognise as a phone or email, for example a bare handle on
   // a non-A2A channel. Try the handle index before giving up.
   const handle = normalizeHandle(from);
-  const byHandle = handle ? contacts.findByHandle(handle) : undefined;
+  const byHandle = handle && !isReservedHandle(handle) ? contacts.findByHandle(handle) : undefined;
   if (byHandle) return contactPrincipal(byHandle);
   return strangerPrincipal(msg, from || "unknown");
 }

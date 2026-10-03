@@ -4,6 +4,7 @@
  * process also opens an Inkbox tunnel and subscribes the webhook, mirroring
  * the server's own main.ts so iMessage reaches a laptop.
  */
+import { loadConfig } from "@open-instinct/core";
 import { parse, str, flag, type OptionSpec } from "../args.js";
 import type { CliContext } from "../context.js";
 import { readSecrets, applySecretsToEnv } from "../secrets.js";
@@ -93,6 +94,7 @@ export async function runDev(ctx: CliContext, argv: string[]): Promise<number> {
   if (flag(values, "tunnel")) env.INSTINCT_TUNNEL = "1";
   const applied = applySecretsToEnv(env, readSecrets(ctx.dataDir));
   if (applied.length > 0) log(`loaded ${applied.join(", ")} from secrets/inkbox.json`);
+  warnIfAppsOff(ctx);
 
   const server = await (ctx.io.importServer ?? defaultImportServer)();
   const app = await server.boot(env, { logger: log });
@@ -126,6 +128,25 @@ export async function runDev(ctx: CliContext, argv: string[]): Promise<number> {
     await app.close?.();
   });
   return 0;
+}
+
+/**
+ * config.json wins over env after the first boot, so a COMPOSIO_API_KEY exported
+ * later does nothing until apps are switched on. Say so instead of booting silently.
+ */
+export function appsWarning(env: NodeJS.ProcessEnv, appsEnabled: boolean): string | undefined {
+  if (!env.COMPOSIO_API_KEY || appsEnabled) return undefined;
+  return "COMPOSIO_API_KEY is set but apps are off in config.json (apps.enabled=false), so no Gmail or Calendar tools will load. Run `instinct init --name <you> --apps` (add --toolkits gmail,googlecalendar to choose apps) and start again.";
+}
+
+function warnIfAppsOff(ctx: CliContext): void {
+  try {
+    const config = loadConfig(ctx.state(), ctx.env);
+    const warning = appsWarning(ctx.env, config.apps.enabled);
+    if (warning) ctx.warn(warning);
+  } catch {
+    // The server reports config problems itself when it boots.
+  }
 }
 
 async function startTunnel(ctx: CliContext, server: ServerModule, app: BootLike, port: number, log: (m: string) => void): Promise<TunnelHandle> {

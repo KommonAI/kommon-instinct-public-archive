@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentEnvFor, maritimeCreateBody, provisionUser, webhookUrlFor } from "../src/provision.js";
+import { DEFAULT_MARITIME_LLM_MODEL, MARITIME_AGENT_PORT, agentEnvFor, linkRedirectUriFor, maritimeCreateBody, provisionUser, webhookUrlFor } from "../src/provision.js";
 import { UserStore } from "../src/store.js";
 import { fakeInkbox, fakeMaritime, readyUser, tempDir } from "./helpers.js";
 
@@ -52,15 +52,20 @@ describe("provisionUser", () => {
       name: "instinct-maria",
       framework: "custom",
       imageName: "ghcr.io/x/agent:1",
-      exposedPort: 8080,
+      exposedPort: MARITIME_AGENT_PORT,
       healthCheckPath: "/health",
       desktop: true,
       externalId: user.id,
       idleTtlSeconds: 900,
     });
+    expect(body["exposedPort"]).toBe(18789);
+    expect(body["useMaritimeLlm"]).toBeUndefined();
     expect(typeof body["instructions"]).toBe("string");
     const env = body["initialEnvVars"] as Array<{ key: string; value: string; isSecret: boolean }>;
     const byKey = Object.fromEntries(env.map((e) => [e.key, e]));
+    // The bound port and the exposed port are the same number, stated once.
+    expect(byKey["PORT"]).toEqual({ key: "PORT", value: "18789", isSecret: false });
+    expect(env.filter((e) => e.key === "PORT")).toHaveLength(1);
     expect(byKey["INKBOX_API_KEY"]).toEqual({ key: "INKBOX_API_KEY", value: "ik_idn_maria", isSecret: true });
     expect(byKey["INKBOX_AGENT_HANDLE"]?.value).toBe("maria");
     expect(byKey["INKBOX_IDENTITY_ID"]?.value).toBe("idn_maria");
@@ -69,6 +74,8 @@ describe("provisionUser", () => {
     expect(byKey["INSTINCT_OWNER_EMAIL"]?.value).toBe("maria@example.com");
     expect(byKey["ANTHROPIC_API_KEY"]).toMatchObject({ isSecret: true });
     expect(byKey["COMPOSIO_API_KEY"]).toMatchObject({ isSecret: true });
+    // Without COMPOSIO_TOOLKITS core keeps apps disabled, so the key alone would be useless.
+    expect(byKey["COMPOSIO_TOOLKITS"]).toEqual({ key: "COMPOSIO_TOOLKITS", value: "gmail,googlecalendar,googlecontacts", isSecret: false });
     expect(byKey["INSTINCT_COMPUTER"]?.value).toBe("auto");
     expect(byKey["INSTINCT_MODEL"]).toMatchObject({ isSecret: false });
     expect(byKey["EXTRA_TOKEN"]).toMatchObject({ isSecret: true });
@@ -82,8 +89,45 @@ describe("provisionUser", () => {
     expect(keys).not.toContain("INSTINCT_OWNER_EMAIL");
     expect(keys).not.toContain("ANTHROPIC_API_KEY");
     expect(keys).not.toContain("COMPOSIO_API_KEY");
+    expect(keys).not.toContain("COMPOSIO_TOOLKITS");
+    expect(keys).not.toContain("INSTINCT_MODEL");
+    expect(keys).not.toContain("LINK_CLIENT_ID");
     expect(maritimeCreateBody(readyUser(), { maritime: { apiKey: "k", agentImage: "img", idleTtlSeconds: 60 } })["idleTtlSeconds"]).toBe(60);
     expect(webhookUrlFor("https://gw.example.com///", "usr x")).toBe("https://gw.example.com/webhooks/inkbox/usr%20x");
+  });
+
+  it("sends the operator's toolkits with the Composio key and keeps an extraEnv PORT from duplicating", () => {
+    const env = agentEnvFor(readyUser(), { composioApiKey: "cmp", composioToolkits: "gmail, slack", maritime: { apiKey: "k", agentImage: "img", extraEnv: { PORT: "8080", COMPOSIO_TOOLKITS: "ignored" } } });
+    const byKey = Object.fromEntries(env.map((e) => [e.key, e.value]));
+    expect(byKey["COMPOSIO_TOOLKITS"]).toBe("gmail, slack");
+    expect(byKey["PORT"]).toBe("18789");
+    expect(env.filter((e) => e.key === "PORT")).toHaveLength(1);
+    expect(env.filter((e) => e.key === "COMPOSIO_TOOLKITS")).toHaveLength(1);
+  });
+
+  it("asks for Maritime's metered LLM and points INSTINCT_MODEL at it", () => {
+    const deps = { maritime: { apiKey: "k", agentImage: "img", useMaritimeLlm: true } };
+    const body = maritimeCreateBody(readyUser(), deps);
+    expect(body["useMaritimeLlm"]).toBe(true);
+    const byKey = Object.fromEntries((body["initialEnvVars"] as Array<{ key: string; value: string; isSecret: boolean }>).map((e) => [e.key, e]));
+    expect(byKey["INSTINCT_MODEL"]).toEqual({ key: "INSTINCT_MODEL", value: `openai-compatible/${DEFAULT_MARITIME_LLM_MODEL}`, isSecret: false });
+
+    const custom = agentEnvFor(readyUser(), { maritime: { apiKey: "k", agentImage: "img", useMaritimeLlm: true, maritimeModel: "gpt-5.5", extraEnv: { INSTINCT_MODEL: "anthropic/x" } } });
+    expect(custom.filter((e) => e.key === "INSTINCT_MODEL")).toEqual([{ key: "INSTINCT_MODEL", value: "openai-compatible/gpt-5.5", isSecret: false }]);
+  });
+
+  it("passes Link credentials through with a redirect URI on this gateway", () => {
+    const env = agentEnvFor(readyUser({ id: "usr_l" }), {
+      maritime: { apiKey: "k", agentImage: "img" },
+      link: { clientId: "lc_1", clientSecret: "ls_1", stripePublishableKey: "pk_test_1" },
+      publicUrl: "https://gw.example.com/",
+    });
+    const byKey = Object.fromEntries(env.map((e) => [e.key, e]));
+    expect(byKey["LINK_CLIENT_ID"]).toEqual({ key: "LINK_CLIENT_ID", value: "lc_1", isSecret: false });
+    expect(byKey["LINK_CLIENT_SECRET"]).toEqual({ key: "LINK_CLIENT_SECRET", value: "ls_1", isSecret: true });
+    expect(byKey["STRIPE_PUBLISHABLE_KEY"]).toEqual({ key: "STRIPE_PUBLISHABLE_KEY", value: "pk_test_1", isSecret: false });
+    expect(byKey["LINK_REDIRECT_URI"]).toEqual({ key: "LINK_REDIRECT_URI", value: "https://gw.example.com/oauth/link/callback/usr_l", isSecret: false });
+    expect(linkRedirectUriFor("https://gw.example.com", "usr x")).toBe("https://gw.example.com/oauth/link/callback/usr%20x");
   });
 
   it("resumes after a failure without repeating finished steps", async () => {

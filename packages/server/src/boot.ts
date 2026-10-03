@@ -29,9 +29,11 @@ import { computerGuidance, detectComputer } from "@open-instinct/computer";
 import type { ComputerBackend } from "@open-instinct/computer";
 import { ComposioApps, DEFAULT_TOOLKITS, appsGuidance } from "@open-instinct/apps";
 import { networkTools } from "@open-instinct/network";
-import { ConsoleOutbox } from "./console-outbox.js";
+import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools } from "./file-tools.js";
+import { describeDataPart, promptExtraFor } from "./hooks.js";
 import { createScheduleSync, type ScheduleSync } from "./maritime-schedules.js";
+import { loadPaymentsModule, paymentsEnv, type LinkWalletLike, type PaymentsModule } from "./payments.js";
 import { loadSkillsPrompt, resolveSkillsDir } from "./skills.js";
 
 export interface BootOptions {
@@ -42,6 +44,8 @@ export interface BootOptions {
   skillsDir?: string;
   /** Override for tests. Default: real fetch. */
   fetchImpl?: typeof fetch;
+  /** Override for tests: the payments module to wire instead of importing @open-instinct/payments. */
+  payments?: PaymentsModule;
 }
 
 export interface BootResult {
@@ -57,6 +61,10 @@ export interface BootResult {
   appsConnected?: string[];
   startedAt: number;
   modelSpec: string;
+  /** Finished chat replies waiting for the next /chat on their conversation. */
+  chatBuffer: ChatReplyBuffer;
+  /** Set when LINK_CLIENT_ID, LINK_CLIENT_SECRET and STRIPE_PUBLISHABLE_KEY are present and the package is installed. */
+  wallet?: LinkWalletLike;
 }
 
 export const DEFAULT_MARITIME_MCP_URL = "https://mcp.maritime.sh";
@@ -85,11 +93,16 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const externalUserId = inkbox?.handle ?? config.agent.handle ?? "owner";
 
   // Outbox: Inkbox when configured, else console. A caller-supplied outbox wins (tests).
+  // Whatever the transport, `chat` replies are buffered for the HTTP layer: that channel
+  // is the dashboard or CLI waiting on a response, not a wire Inkbox can deliver on.
   let channel: InkboxChannel | undefined;
   let outbox: Outbox;
+  let chatBuffer: ChatReplyBuffer;
   if (opts.outbox) {
-    outbox = opts.outbox;
     if (opts.outbox instanceof InkboxChannel) channel = opts.outbox;
+    const wrapped = new ChatAwareOutbox(opts.outbox);
+    outbox = wrapped;
+    chatBuffer = wrapped.chat;
   } else if (inkbox) {
     channel = new InkboxChannel({
       apiKey: inkbox.apiKey,
@@ -97,9 +110,13 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       identityId: inkbox.identityId,
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     });
-    outbox = channel;
+    const wrapped = new ChatAwareOutbox(channel);
+    outbox = wrapped;
+    chatBuffer = wrapped.chat;
   } else {
-    outbox = new ConsoleOutbox({ logger: log });
+    const console_ = new ConsoleOutbox({ logger: log });
+    outbox = console_;
+    chatBuffer = console_.chat;
     log("Inkbox not configured: replies go to the console outbox");
   }
 
@@ -121,7 +138,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
 
   if (channel) registry.registerMany(messagingTools({ channel, contacts, config }));
 
-  registry.registerMany(fileTools(state.path("workspace")));
+  registry.registerMany(fileTools(state.path("workspace"), { env }));
 
   // Computer: in-VM desktopd, hosted Maritime Computers MCP, or nothing.
   const computer = await safely(log, "computer", () =>
@@ -131,6 +148,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       maritimeMcpUrl: config.computer.maritimeMcpUrl ?? env.MARITIME_COMPUTERS_MCP_URL ?? DEFAULT_MARITIME_MCP_URL,
       maritimeApiKey: env.MARITIME_API_KEY,
       externalUserId,
+      // Maritime starts the desktop stack in the background; desktopd may still be coming up.
+      expectDesktopd: env.MARITIME_DESKTOP === "1",
       ...(env.MARITIME_AGENT_ID ? { agentId: env.MARITIME_AGENT_ID } : {}),
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
       logger: log,
@@ -145,10 +164,11 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     }
   }
 
-  // Apps through Composio, when the owner gave us a key.
+  // Apps through Composio, when the deployer gave us a key. The key is the switch:
+  // config.apps.enabled only records that a toolkit list was seeded.
   let apps: ComposioApps | undefined;
   let appsConnected: string[] | undefined;
-  if (env.COMPOSIO_API_KEY && config.apps.enabled) {
+  if (env.COMPOSIO_API_KEY) {
     const toolkits = config.apps.toolkits.length > 0 ? config.apps.toolkits : DEFAULT_TOOLKITS;
     const composio = new ComposioApps({ apiKey: env.COMPOSIO_API_KEY, userId: externalUserId, toolkits, state, logger: log });
     const connected = await safely(log, "apps", async () => {
@@ -196,6 +216,33 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     }),
   );
 
+  // Payments: a Stripe Link agent wallet, when the Link OAuth client and Stripe key are set.
+  let wallet: LinkWalletLike | undefined;
+  const payments = paymentsEnv(env);
+  if (payments) {
+    const mod = opts.payments ?? (await loadPaymentsModule());
+    if (!mod) {
+      log("payments: LINK_* set but @open-instinct/payments is not installed; skipping");
+    } else {
+      const built = await safely(log, "payments", () => {
+        const w = new mod.LinkWallet({
+          state,
+          clientId: payments.clientId,
+          clientSecret: payments.clientSecret,
+          publishableKey: payments.publishableKey,
+          redirectUri: payments.redirectUri,
+          ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+        });
+        return { wallet: w, tools: mod.paymentsTools({ wallet: w, outbox, config, audit, state }) };
+      });
+      if (built) {
+        wallet = built.wallet;
+        registry.registerMany(built.tools);
+        log(`payments: Link wallet ${wallet.isConnected() ? "connected" : "not connected yet"}, callback ${payments.redirectUri}`);
+      }
+    }
+  }
+
   const skillsDir = resolveSkillsDir({ explicit: opts.skillsDir, env, packageUrl: import.meta.url });
   const skills = loadSkillsPrompt(skillsDir, log);
   if (skills) promptSections.push(skills);
@@ -216,6 +263,9 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     skillsPrompt,
     streamFn: opts.streamFn ?? (streamSimple as StreamFn),
     getApiKey: (provider: string) => apiKeyFor(provider, env),
+    // Core cannot import the network package; the server bridges OIP and the network guidance.
+    describeData: describeDataPart,
+    promptExtra: promptExtraFor,
     ...(env.INSTINCT_REPLY_BUDGET_MS ? { replyBudgetMs: Number(env.INSTINCT_REPLY_BUDGET_MS) } : {}),
   });
 
@@ -248,6 +298,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     appsConnected,
     startedAt,
     modelSpec,
+    chatBuffer,
+    ...(wallet ? { wallet } : {}),
     async close() {
       stopScheduler();
       sync?.stop();
@@ -262,9 +314,37 @@ interface ToolkitStatus {
   connected: boolean;
 }
 
-/** Pi reads provider keys from env itself; only the generic OpenAI-compatible provider needs help. */
-function apiKeyFor(provider: string, env: NodeJS.ProcessEnv): string | undefined {
-  if (provider === "openai-compatible") return env.OPENAI_API_KEY;
+/** Env variable per Pi provider id. Anything not listed falls back to <PROVIDER>_API_KEY. */
+export const PROVIDER_KEY_ENV: Record<string, string[]> = {
+  "anthropic": ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
+  "openai": ["OPENAI_API_KEY"],
+  "openai-compatible": ["OPENAI_API_KEY"],
+  "openai-codex": ["OPENAI_API_KEY"],
+  "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  "google-gemini-cli": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+  "groq": ["GROQ_API_KEY"],
+  "mistral": ["MISTRAL_API_KEY"],
+  "xai": ["XAI_API_KEY"],
+  "openrouter": ["OPENROUTER_API_KEY"],
+  "deepseek": ["DEEPSEEK_API_KEY"],
+  "cerebras": ["CEREBRAS_API_KEY"],
+  "zai": ["ZAI_API_KEY"],
+  "minimax": ["MINIMAX_API_KEY"],
+  "github-copilot": ["COPILOT_GITHUB_TOKEN"],
+  "amazon-bedrock": ["AWS_BEARER_TOKEN_BEDROCK"],
+};
+
+/**
+ * Provider key from the env the server was handed (not process.env, so tests and
+ * embedders control it). Pi would read process.env itself; passing the key keeps
+ * the lookup in one place and lets `instinct dev` and embedders inject keys.
+ */
+export function apiKeyFor(provider: string, env: NodeJS.ProcessEnv): string | undefined {
+  const names = PROVIDER_KEY_ENV[provider] ?? [`${provider.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`];
+  for (const name of names) {
+    const value = env[name]?.trim();
+    if (value) return value;
+  }
   return undefined;
 }
 

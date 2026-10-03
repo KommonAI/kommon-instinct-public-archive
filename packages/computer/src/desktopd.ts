@@ -9,7 +9,7 @@
  */
 import type { RegisteredTool, ToolMeta, ToolResultLike } from "@open-instinct/core";
 import type { Static } from "typebox";
-import { defineTool, textResult } from "./tool.js";
+import { defineTool, textResult } from "@open-instinct/core";
 import {
   desktopdBatchToolResult,
   desktopdResultToContent,

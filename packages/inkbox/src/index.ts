@@ -9,5 +9,5 @@ export { InkboxA2A, A2ARpcError, a2aParts, summarizeSendResult } from "./a2a.js"
 export type { A2AIntent, A2ASendResult } from "./a2a.js";
 export { messagingTools, resolveTarget } from "./tools.js";
 export type { MessagingDeps, ResolvedTarget } from "./tools.js";
-export { InkboxHttpError, createRest, INKBOX_BASE_URL } from "./http.js";
+export { InkboxHttpError, createRest, parseRetryAfter, isHttpStatus, INKBOX_BASE_URL } from "./http.js";
 export type { RestClient, RestOptions } from "./http.js";

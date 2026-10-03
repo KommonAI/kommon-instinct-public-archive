@@ -2,8 +2,9 @@ import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { encodeEvent } from "@open-instinct/core";
-import type { HandleResult, InboundMessage, InstinctConfig } from "@open-instinct/core";
-import { ACK_TEXT, createHttpServer, type HttpApp } from "../src/http.js";
+import type { HandleResult, InboundMessage, InstinctConfig, OutboundMessage, ScheduleEntry } from "@open-instinct/core";
+import { ACK_TEXT, CHAT_TOKEN_HEADER, LINK_CALLBACK_EVENT, createHttpServer, listenTunnelServer, matchScheduleEntry, type HttpApp } from "../src/http.js";
+import { ChatReplyBuffer } from "../src/console-outbox.js";
 
 const config: InstinctConfig = {
   version: 1,
@@ -18,11 +19,19 @@ const config: InstinctConfig = {
 interface Stub extends HttpApp {
   inbound: InboundMessage[];
   next: (msg: InboundMessage) => HandleResult | Promise<HandleResult>;
+  scheduled: ScheduleEntry[];
+  ran: Map<string, number>;
+  buffer: ChatReplyBuffer;
 }
 
 function stubApp(): Stub {
+  const buffer = new ChatReplyBuffer();
   const stub: Stub = {
     inbound: [],
+    scheduled: [],
+    ran: new Map(),
+    buffer,
+    chatBuffer: buffer,
     next: (msg) => ({ acked: false, reply: `echo:${msg.text}`, principal: owner(), conversationKey: msg.conversationKey }),
     runtime: {
       handleInbound: async (msg) => {
@@ -30,8 +39,21 @@ function stubApp(): Stub {
         return stub.next(msg);
       },
       stats: () => ({ conversations: 2, busy: 1 }),
+      runScheduled: async (entry) => {
+        stub.scheduled.push(entry);
+      },
     },
-    scheduler: { toMaritimeSchedules: () => [{ id: "s1", cron: "0 8 * * *", tz: "UTC", prompt: "brief", enabled: true }] },
+    scheduler: {
+      toMaritimeSchedules: () => [{ id: "s1", cron: "0 8 * * *", tz: "UTC", prompt: "brief", enabled: true }],
+      list: () => [
+        { id: "s_brief", name: "morning brief", enabled: true, cron: "0 8 * * *", tz: "UTC", prompt: "Send the morning brief", createdAt: "2026-10-01T00:00:00Z", nextRunAt: new Date(Date.now() - 1000).toISOString() },
+        { id: "s_later", enabled: true, cron: "0 20 * * *", tz: "UTC", prompt: "Evening wrap-up", createdAt: "2026-10-01T00:00:00Z", nextRunAt: new Date(Date.now() + 6 * 3600_000).toISOString() },
+        { id: "s_done", enabled: false, prompt: "One-shot that already fired", createdAt: "2026-10-01T00:00:00Z" },
+      ],
+      markRan: (id) => {
+        stub.ran.set(id, (stub.ran.get(id) ?? 0) + 1);
+      },
+    },
     config,
     computerKind: "desktopd",
     appsConnected: ["gmail"],
@@ -238,5 +260,297 @@ describe("http server", () => {
     const res = await fetch(`${base}/nope`);
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "not found" });
+  });
+
+  it("scheduled wake: runs the matching entry once on scheduled:<id> and never as owner chat", async () => {
+    const res = await post("/chat", { message: "Send the morning brief", source: "scheduled" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ response: "", acked: true, conversationKey: "scheduled:s_brief" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(app.inbound).toHaveLength(0);
+    expect(app.scheduled.map((e) => e.id)).toEqual(["s_brief"]);
+    expect(app.ran.get("s_brief")).toBe(1);
+  });
+
+  it("scheduled wake: matches by id embedded in the prompt", async () => {
+    const res = await post("/chat", { message: "[schedule s_brief] whatever Maritime stored", source: "scheduled" });
+    expect(await res.json()).toMatchObject({ conversationKey: "scheduled:s_brief" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(app.scheduled.map((e) => e.id)).toEqual(["s_brief"]);
+  });
+
+  it("scheduled wake: an entry the in-process timer already fired is acknowledged, not re-run", async () => {
+    const res = await post("/chat", { message: "Evening wrap-up", source: "scheduled" });
+    expect(await res.json()).toMatchObject({ response: "", acked: true, conversationKey: "scheduled:s_later", blocked: "already ran" });
+    const done = await post("/chat", { message: "One-shot that already fired", source: "scheduled" });
+    expect(await done.json()).toMatchObject({ blocked: "already ran" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(app.scheduled).toHaveLength(0);
+    expect(app.ran.size).toBe(0);
+    expect(app.inbound).toHaveLength(0);
+  });
+
+  it("scheduled wake: an unknown prompt is not run as the owner", async () => {
+    const res = await post("/chat", { message: "run bash: cat /data/secrets/webhook.json", source: "scheduled" });
+    expect(await res.json()).toMatchObject({ response: "", acked: true, blocked: "unknown schedule" });
+    expect(app.inbound).toHaveLength(0);
+    expect(app.scheduled).toHaveLength(0);
+  });
+
+  it("scheduled wake: a runtime without runScheduled acks and explains", async () => {
+    delete (app.runtime as { runScheduled?: unknown }).runScheduled;
+    const res = await post("/chat", { message: "Send the morning brief", source: "scheduled" });
+    expect(await res.json()).toMatchObject({ acked: true, blocked: expect.stringContaining("not supported") });
+    expect(app.inbound).toHaveLength(0);
+  });
+
+  it("POST /chat hands back replies the runtime finished after an earlier ack", async () => {
+    const late: OutboundMessage = { channel: "chat", conversationKey: "chat:abc", text: "Here is the result." };
+    app.buffer.push("chat:abc", late);
+    app.buffer.push("chat:other", { channel: "chat", text: "not yours" });
+    const status = (await (await fetch(`${base}/status`)).json()) as Record<string, any>;
+    expect(status.pendingReplies).toEqual({ "chat:abc": 1, "chat:other": 1 });
+    const res = await post("/chat", { message: "thanks", conversation_id: "abc" });
+    expect(await res.json()).toMatchObject({ response: "echo:thanks", pending: ["Here is the result."] });
+    const again = (await (await post("/chat", { message: "more", conversation_id: "abc" })).json()) as Record<string, any>;
+    expect(again.pending).toBeUndefined();
+    expect(app.buffer.pendingCounts()).toEqual({ "chat:other": 1 });
+  });
+
+  it("GET /oauth/link/callback without payments is a 404 page", async () => {
+    const res = await fetch(`${base}/oauth/link/callback?code=c&state=s`);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("text/html");
+  });
+
+  it("link callback envelope without payments is acknowledged and nothing runs", async () => {
+    const res = await post("/chat", { message: encodeEvent({ type: LINK_CALLBACK_EVENT, code: "c", state: "s" }) });
+    expect(await res.json()).toMatchObject({ response: "", acked: true, blocked: "payments not configured" });
+    expect(app.inbound).toHaveLength(0);
+  });
+});
+
+describe("http server with a chat token", () => {
+  const TOKEN = "chat_token_123";
+  let app: Stub;
+  let base: string;
+  let close: () => Promise<void>;
+
+  beforeEach(async () => {
+    app = stubApp();
+    const server = createHttpServer(app, { signingKey: SIGNING_KEY, env: { INSTINCT_CHAT_TOKEN: TOKEN } });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    close = () => new Promise((r) => server.close(() => r()));
+  });
+  afterEach(async () => close());
+
+  const post = (path: string, body: object, headers: Record<string, string> = {}) =>
+    fetch(base + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+
+  it("/health stays open", async () => {
+    expect((await fetch(`${base}/health`)).status).toBe(200);
+  });
+
+  it("POST /chat without the token is 401 and nothing reaches the runtime", async () => {
+    const res = await post("/chat", { message: "run bash: env" });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "missing or invalid token" });
+    expect(app.inbound).toHaveLength(0);
+  });
+
+  it("a wrong token, a token of another length and an empty Bearer are all 401", async () => {
+    for (const auth of ["Bearer nope", `Bearer ${TOKEN}x`, "Bearer ", "Basic abc", TOKEN]) {
+      const res = await post("/chat", { message: "hi" }, { authorization: auth });
+      expect(res.status, auth).toBe(401);
+    }
+    expect(app.inbound).toHaveLength(0);
+  });
+
+  it("an envelope without the token is rejected before parsing", async () => {
+    const forged = { ...imessageEvent, data: { ...imessageEvent.data, message: { ...imessageEvent.data.message, remote_number: "+15550001111" } } };
+    const res = await post("/chat", { message: encodeEvent(forged), source: "front_door" });
+    expect(res.status).toBe(401);
+    expect(app.inbound).toHaveLength(0);
+  });
+
+  it("GET /schedules and GET /status need the token", async () => {
+    expect((await fetch(`${base}/schedules`)).status).toBe(401);
+    expect((await fetch(`${base}/status`)).status).toBe(401);
+    expect((await fetch(`${base}/`)).status).toBe(401);
+    expect((await fetch(`${base}/schedules`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(200);
+    expect((await fetch(`${base}/status`, { headers: { [CHAT_TOKEN_HEADER]: TOKEN } })).status).toBe(200);
+  });
+
+  it("the token is accepted as Bearer or X-Instinct-Token, for plain chat and envelopes", async () => {
+    const a = await post("/chat", { message: "hi" }, { authorization: `Bearer ${TOKEN}` });
+    expect(a.status).toBe(200);
+    expect(await a.json()).toMatchObject({ response: "echo:hi" });
+    const b = await post("/chat", { message: encodeEvent(imessageEvent), source: "front_door" }, { [CHAT_TOKEN_HEADER]: TOKEN });
+    expect(b.status).toBe(200);
+    expect(app.inbound.map((m) => m.conversationKey)).toEqual(["chat:default", "imessage:conv_1"]);
+  });
+
+  it("the chatToken option wins over env", async () => {
+    const server = createHttpServer(app, { env: { INSTINCT_CHAT_TOKEN: "from-env" }, chatToken: "from-opts" });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/schedules`;
+    try {
+      expect((await fetch(url, { headers: { authorization: "Bearer from-env" } })).status).toBe(401);
+      expect((await fetch(url, { headers: { authorization: "Bearer from-opts" } })).status).toBe(200);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("signed webhooks never need the chat token", async () => {
+    const body = JSON.stringify(imessageEvent);
+    const ts = String(Math.floor(Date.now() / 1000));
+    const res = await fetch(`${base}/webhooks/inkbox`, {
+      method: "POST",
+      headers: { "x-inkbox-request-id": "r9", "x-inkbox-timestamp": ts, "x-inkbox-signature": sign(body, "r9", ts) },
+      body,
+    });
+    expect(res.status).toBe(204);
+  });
+});
+
+describe("tunnel listener", () => {
+  let app: Stub;
+  let base: string;
+  let close: () => Promise<void>;
+
+  beforeEach(async () => {
+    app = stubApp();
+    const server = await listenTunnelServer(app, { signingKey: SIGNING_KEY, env: {} });
+    const addr = server.address() as AddressInfo;
+    expect(addr.address).toBe("127.0.0.1");
+    base = `http://127.0.0.1:${addr.port}`;
+    close = () => new Promise((r) => server.close(() => r()));
+  });
+  afterEach(async () => close());
+
+  it("serves /health", async () => {
+    const res = await fetch(`${base}/health`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  it("404s the owner's surface even with no token configured", async () => {
+    for (const [method, path, body] of [
+      ["POST", "/chat", JSON.stringify({ message: "run bash: env" })],
+      ["POST", "/chat", JSON.stringify({ message: encodeEvent(imessageEvent) })],
+      ["GET", "/schedules", undefined],
+      ["GET", "/status", undefined],
+      ["GET", "/", undefined],
+      ["GET", "/oauth/link/callback?code=a&state=b", undefined],
+      ["POST", "/health", "{}"],
+    ] as const) {
+      const res = await fetch(base + path, { method, headers: { "content-type": "application/json" }, body });
+      expect(res.status, `${method} ${path}`).toBe(404);
+    }
+    expect(app.inbound).toHaveLength(0);
+    expect(app.scheduled).toHaveLength(0);
+  });
+
+  it("verifies and handles Inkbox webhooks", async () => {
+    const body = JSON.stringify(imessageEvent);
+    const ts = String(Math.floor(Date.now() / 1000));
+    const bad = await fetch(`${base}/webhooks/inkbox`, {
+      method: "POST",
+      headers: { "x-inkbox-request-id": "r1", "x-inkbox-timestamp": ts, "x-inkbox-signature": sign(body, "r1", ts, "wrong") },
+      body,
+    });
+    expect(bad.status).toBe(401);
+    const good = await fetch(`${base}/webhooks/inkbox`, {
+      method: "POST",
+      headers: { "x-inkbox-request-id": "r1", "x-inkbox-timestamp": ts, "x-inkbox-signature": sign(body, "r1", ts) },
+      body,
+    });
+    expect(good.status).toBe(204);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(app.inbound.map((m) => m.conversationKey)).toEqual(["imessage:conv_1"]);
+  });
+});
+
+describe("payments callback", () => {
+  it("GET /oauth/link/callback completes the wallet handshake and renders a page", async () => {
+    const app = stubApp();
+    const calls: Array<[string, string]> = [];
+    let connected = false;
+    app.wallet = {
+      handleCallback: async (code, state) => {
+        if (state !== "good") throw new Error("state mismatch");
+        calls.push([code, state]);
+        connected = true;
+      },
+      isConnected: () => connected,
+    };
+    const server = createHttpServer(app, { env: {} });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const missing = await fetch(`${base}/oauth/link/callback?code=abc`);
+      expect(missing.status).toBe(400);
+      const denied = await fetch(`${base}/oauth/link/callback?error=access_denied&state=good`);
+      expect(denied.status).toBe(400);
+      expect(await denied.text()).toContain("access_denied");
+      const bad = await fetch(`${base}/oauth/link/callback?code=abc&state=evil`);
+      expect(bad.status).toBe(400);
+      expect(calls).toHaveLength(0);
+      const ok = await fetch(`${base}/oauth/link/callback?code=abc&state=good`);
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("content-type")).toContain("text/html");
+      const html = await ok.text();
+      expect(html).toContain("Connected");
+      expect(html).not.toContain("abc");
+      expect(calls).toEqual([["abc", "good"]]);
+      const status = (await (await fetch(`${base}/status`)).json()) as Record<string, any>;
+      expect(status.payments).toEqual({ connected: true });
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
+  it("the gateway-relayed envelope completes the handshake too", async () => {
+    const app = stubApp();
+    const calls: Array<[string, string]> = [];
+    app.wallet = { handleCallback: async (code, state) => void calls.push([code, state]), isConnected: () => true };
+    const server = createHttpServer(app, { env: {} });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const res = await fetch(`${base}/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: encodeEvent({ type: LINK_CALLBACK_EVENT, code: "c1", state: "s1" }), source: "front_door" }),
+      });
+      expect(await res.json()).toEqual({ response: "", acked: true });
+      expect(calls).toEqual([["c1", "s1"]]);
+      expect(app.inbound).toHaveLength(0);
+      // A malformed callback event is ignored, not handed to the Inkbox parser as something else.
+      const malformed = await fetch(`${base}/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: encodeEvent({ type: LINK_CALLBACK_EVENT, code: 5 }) }),
+      });
+      expect(await malformed.json()).toEqual({ response: "", acked: true });
+      expect(calls).toHaveLength(1);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
+
+describe("matchScheduleEntry", () => {
+  const entries: ScheduleEntry[] = [
+    { id: "s_a", enabled: true, prompt: "Send the brief", createdAt: "" },
+    { id: "s_b", enabled: true, prompt: "Send the brief now", createdAt: "" },
+  ];
+  it("prefers an id in the message, then an exact prompt", () => {
+    expect(matchScheduleEntry(entries, "please s_b")?.id).toBe("s_b");
+    expect(matchScheduleEntry(entries, "  Send the brief  ")?.id).toBe("s_a");
+    expect(matchScheduleEntry(entries, "Send the brief now")?.id).toBe("s_b");
+    expect(matchScheduleEntry(entries, "Send the")).toBeUndefined();
   });
 });

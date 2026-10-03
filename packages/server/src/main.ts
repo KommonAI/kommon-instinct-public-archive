@@ -1,10 +1,19 @@
 /**
  * Entrypoint. boot -> listen -> (optional) Inkbox tunnel + webhook subscription.
  * Reads process.env here and nowhere deeper.
+ *
+ * Listeners. The owner's surface (/chat, /status, /schedules) binds loopback by
+ * default. It binds 0.0.0.0 only when the environment says this is a container
+ * (PORT injected by Maritime or set by docker-compose, or MARITIME_* present) or
+ * when INSTINCT_BIND asks for it. The Inkbox tunnel never points at that
+ * listener: it forwards to a second, loopback-only server that serves /health
+ * and /webhooks/inkbox and nothing else.
  */
+import type http from "node:http";
 import { Inkbox } from "@inkbox/sdk";
+import { bindHostFor } from "./bind.js";
 import { boot } from "./boot.js";
-import { createHttpServer } from "./http.js";
+import { createHttpServer, listenTunnelServer } from "./http.js";
 import { ensureWebhookSubscription, readWebhookSecrets } from "./webhook-setup.js";
 
 const env = process.env;
@@ -12,22 +21,31 @@ const log = (m: string): void => console.log(`[instinct] ${m}`);
 
 async function main(): Promise<void> {
   const port = Number(env.PORT ?? 8080);
+  const host = bindHostFor(env);
   const app = await boot(env, { logger: log });
 
-  const server = createHttpServer(app, {
+  const httpOpts = {
     env,
     logger: log,
     signingKeyProvider: () => env.INKBOX_SIGNING_KEY ?? readWebhookSecrets(app.state).signingKey,
-  });
+  };
+  const server = createHttpServer(app, httpOpts);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "0.0.0.0", () => resolve());
+    server.listen(port, host, () => resolve());
   });
-  log(`listening on 0.0.0.0:${port}`);
+  log(`listening on ${host}:${port}`);
+  if (host !== "127.0.0.1" && !env.INSTINCT_CHAT_TOKEN) {
+    log("warning: /chat is reachable beyond loopback with no INSTINCT_CHAT_TOKEN; rely on this only behind Maritime or a private network");
+  }
 
+  let tunnelServer: http.Server | undefined;
   let closeTunnel: (() => Promise<void>) | undefined;
   if (env.INSTINCT_TUNNEL === "1" && env.INKBOX_API_KEY) {
-    closeTunnel = await startTunnel(port, app.state).catch((err: Error) => {
+    tunnelServer = await listenTunnelServer(app, httpOpts);
+    const tunnelPort = (tunnelServer.address() as { port: number }).port;
+    log(`tunnel listener on 127.0.0.1:${tunnelPort} (webhooks only)`);
+    closeTunnel = await startTunnel(tunnelPort, app.state).catch((err: Error) => {
       log(`tunnel not started: ${err.message}`);
       return undefined;
     });
@@ -42,6 +60,7 @@ async function main(): Promise<void> {
     timer.unref();
     Promise.resolve()
       .then(() => closeTunnel?.())
+      .then(() => new Promise<void>((resolve) => (tunnelServer ? tunnelServer.close(() => resolve()) : resolve())))
       .then(() => new Promise<void>((resolve) => server.close(() => resolve())))
       .then(() => app.close())
       .finally(() => process.exit(0));
@@ -61,7 +80,7 @@ async function startTunnel(port: number, state: Awaited<ReturnType<typeof boot>>
     installSignalHandlers: false,
     onStatus: (status) => log(`tunnel ${status}`),
   });
-  log(`tunnel up: ${listener.publicUrl}`);
+  log(`tunnel up: ${listener.publicUrl} (serves /health and /webhooks/inkbox only)`);
 
   if (env.INKBOX_ADMIN_API_KEY) {
     try {

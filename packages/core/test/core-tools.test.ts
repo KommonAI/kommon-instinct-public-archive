@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { ApprovalStore } from "../src/approvals.js";
 import { AuditLog } from "../src/audit.js";
-import { coreTools, htmlToText, parseDuckDuckGoHtml, type CoreToolDeps } from "../src/core-tools.js";
+import { WEB_BODY_CAP_BYTES, coreTools, fetchPublic, htmlToText, parseDuckDuckGoHtml, type CoreToolDeps } from "../src/core-tools.js";
+import { checkPublicTarget, isPublicAddress } from "../src/net-guard.js";
 import { MemoryStore } from "../src/memory.js";
 import type { Outbox } from "../src/runtime.js";
 import { Scheduler } from "../src/scheduler.js";
@@ -11,7 +12,16 @@ import { principalOf, tempState, testConfig } from "./helpers.js";
 
 const NOW = new Date("2026-10-03T15:00:00Z");
 
-function setup(opts: { fetchImpl?: typeof fetch; searchApiKey?: string } = {}) {
+/** Public addresses for every name except the ones a test wants to look internal. */
+const stubLookup = async (host: string): Promise<string[]> => {
+  if (host === "rebind.test") return ["93.184.216.34", "127.0.0.1"];
+  if (host === "loopback.test") return ["127.0.0.1"];
+  if (host === "six.test") return ["::1"];
+  if (host === "nowhere.test") throw new Error("ENOTFOUND");
+  return ["93.184.216.34"];
+};
+
+function setup(opts: { fetchImpl?: typeof fetch; searchApiKey?: string; lookup?: (host: string) => Promise<string[]> } = {}) {
   const state = tempState();
   const sent: Array<{ msg: OutboundMessage; principal: Principal }> = [];
   const outbox: Outbox = { send: async (msg, ctx) => void sent.push({ msg, principal: ctx.principal }) };
@@ -22,6 +32,7 @@ function setup(opts: { fetchImpl?: typeof fetch; searchApiKey?: string } = {}) {
     audit: new AuditLog(state),
     config: testConfig(),
     outbox,
+    lookup: stubLookup,
     ...opts,
   };
   const registry = new ToolRegistry();
@@ -36,13 +47,14 @@ function setup(opts: { fetchImpl?: typeof fetch; searchApiKey?: string } = {}) {
   return { deps, registry, run, text, sent, state };
 }
 
-function fakeFetch(routes: Record<string, { status?: number; type?: string; body: string }>): typeof fetch {
+function fakeFetch(routes: Record<string, { status?: number; type?: string; body: string; location?: string }>, seen: string[] = []): typeof fetch {
   return (async (input: string | URL | Request) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    seen.push(url);
     const match = Object.entries(routes).find(([prefix]) => url.startsWith(prefix));
     if (!match) return new Response("not found", { status: 404 });
-    const { status = 200, type = "text/html", body } = match[1];
-    return new Response(body, { status, headers: { "content-type": type } });
+    const { status = 200, type = "text/html", body, location } = match[1];
+    return new Response(body, { status, headers: { "content-type": type, ...(location ? { location } : {}) } });
   }) as typeof fetch;
 }
 
@@ -185,6 +197,82 @@ describe("web tools", () => {
     expect(typeof nope !== "string" && nope.isError).toBe(true);
   });
 
+  it("web_fetch refuses loopback, link-local, private and metadata targets", async () => {
+    const seen: string[] = [];
+    const { run, text } = setup({ fetchImpl: fakeFetch({ http: { body: "leaked-contents" } }, seen) });
+    const refused = [
+      "http://127.0.0.1:5911/fs/read?path=/data/secrets/webhook.json",
+      "http://127.1.2.3/",
+      "http://[::1]:8080/schedules",
+      "http://[0:0:0:0:0:0:0:1]/",
+      "http://[::ffff:127.0.0.1]/",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://metadata.google.internal/computeMetadata/v1/",
+      "http://100.100.100.200/latest/meta-data/",
+      "http://10.0.0.8/",
+      "http://172.16.5.5/",
+      "http://192.168.1.1/",
+      "http://0.0.0.0:8080/status",
+      "http://localhost:5911/health",
+      "http://desktopd.localhost/",
+      "http://[fe80::1]/",
+      "http://[fd00::1]/",
+      "http://loopback.test/",
+      "http://six.test/",
+      "http://rebind.test/",
+      "http://user:pw@example.com/",
+    ];
+    for (const url of refused) {
+      const r = await run("web_fetch", { url });
+      expect(typeof r !== "string" && r.isError, url).toBe(true);
+      expect(text(r), url).toMatch(/Cannot fetch/);
+      expect(text(r), url).not.toContain("leaked-contents");
+    }
+    expect(seen).toEqual([]);
+    const gone = await run("web_fetch", { url: "http://nowhere.test/" });
+    expect(text(gone)).toMatch(/could not resolve/);
+  });
+
+  it("web_fetch follows redirects to public hosts only and stops after three hops", async () => {
+    const seen: string[] = [];
+    const fetchImpl = fakeFetch(
+      {
+        "https://example.com/start": { status: 302, body: "", location: "https://example.org/landing" },
+        "https://example.org/landing": { body: "<p>Landed</p>" },
+        "https://example.com/trap": { status: 301, body: "", location: "http://127.0.0.1:5911/fs/read?path=/data/config.json" },
+        "https://example.com/trap2": { status: 307, body: "", location: "http://loopback.test/" },
+        "https://example.com/loop": { status: 302, body: "", location: "https://example.com/loop" },
+        "http://127.0.0.1": { body: "owner phones" },
+      },
+      seen,
+    );
+    const { run, text } = setup({ fetchImpl });
+    const ok = text(await run("web_fetch", { url: "https://example.com/start" }));
+    expect(ok).toContain("HTTP 200 example.com (final: https://example.org/landing)");
+    expect(ok).toContain("Landed");
+    expect(ok).toContain('<untrusted source="web page example.org">');
+
+    const trap = await run("web_fetch", { url: "https://example.com/trap" });
+    expect(typeof trap !== "string" && trap.isError).toBe(true);
+    expect(text(trap)).toMatch(/redirect to http:\/\/127\.0\.0\.1.*refused/);
+    expect(text(trap)).not.toContain("owner phones");
+    const trap2 = await run("web_fetch", { url: "https://example.com/trap2" });
+    expect(text(trap2)).toMatch(/refused/);
+    expect(seen.some((u) => u.startsWith("http://127.0.0.1") || u.startsWith("http://loopback.test"))).toBe(false);
+
+    const loop = await run("web_fetch", { url: "https://example.com/loop" });
+    expect(typeof loop !== "string" && loop.isError).toBe(true);
+    expect(text(loop)).toMatch(/too many redirects/);
+  });
+
+  it("web_fetch reads at most 1 MiB of the body", async () => {
+    const huge = "x".repeat(WEB_BODY_CAP_BYTES + 50_000);
+    const { run, text } = setup({ fetchImpl: fakeFetch({ "https://example.com/big": { type: "text/plain", body: huge } }) });
+    const out = text(await run("web_fetch", { url: "https://example.com/big" }));
+    expect(out.length).toBeLessThan(21_000); // the 20k text cap still applies on top
+    expect(out).toContain("xxxx");
+  });
+
   it("web_search parses DuckDuckGo HTML when no API key is set", async () => {
     const html = `
       <div class="result results_links">
@@ -223,6 +311,39 @@ describe("web tools", () => {
   it("reports no results instead of failing", async () => {
     const { run, text } = setup({ fetchImpl: fakeFetch({ "https://html.duckduckgo.com/html/": { body: "<html></html>" } }) });
     expect(text(await run("web_search", { query: "zzz" }))).toContain("No results");
+  });
+});
+
+describe("net guard", () => {
+  it("classifies addresses", () => {
+    for (const ip of ["93.184.216.34", "8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "2001:4860:4860::8888"]) expect(isPublicAddress(ip), ip).toBe(true);
+    for (const ip of ["127.0.0.1", "127.255.255.254", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.0.1", "169.254.169.254", "0.0.0.0", "100.100.100.200", "224.0.0.1", "255.255.255.255", "::1", "::", "fe80::1", "fc00::1", "fd12::1", "::ffff:10.0.0.1", "::ffff:7f00:1", "ff02::1", "not-an-ip", ""]) {
+      expect(isPublicAddress(ip), ip).toBe(false);
+    }
+    expect(isPublicAddress("172.32.0.1")).toBe(true);
+    expect(isPublicAddress("100.63.0.1")).toBe(true);
+  });
+
+  it("vets a target by scheme, hostname and every resolved address", async () => {
+    const lookup = async (host: string) => (host === "mixed.example" ? ["93.184.216.34", "10.0.0.1"] : ["93.184.216.34"]);
+    expect((await checkPublicTarget("https://example.com/a", lookup)).ok).toBe(true);
+    expect((await checkPublicTarget("https://mixed.example/", lookup)).ok).toBe(false);
+    expect((await checkPublicTarget("ftp://example.com/", lookup)).ok).toBe(false);
+    expect((await checkPublicTarget("https://example.com./", lookup)).ok).toBe(true);
+    expect((await checkPublicTarget("http://8.8.8.8/", lookup)).ok).toBe(true);
+    const r = await checkPublicTarget("http://[::1]/", lookup);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/loopback|private|reserved/);
+  });
+
+  it("fetchPublic re-checks each hop", async () => {
+    const lookup = async () => ["93.184.216.34"];
+    const seen: string[] = [];
+    const doFetch = fakeFetch({ "https://a.test/": { status: 302, body: "", location: "http://169.254.169.254/" } }, seen);
+    const r = await fetchPublic(doFetch, "https://a.test/", { lookup });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/169\.254\.169\.254/);
+    expect(seen).toEqual(["https://a.test/"]);
   });
 });
 

@@ -1,9 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { InkboxProvisioner } from "@open-instinct/inkbox";
+import { type SignupLimits, SlidingWindowLimiter, clientAddress, pendingCount, signupLimits } from "./limits.js";
 import { type Logger, consoleLogger } from "./logger.js";
-import { GITHUB_URL, type RouterInfo, renderConnect, renderLanding, renderMessage } from "./pages.js";
-import { type MaritimeProvisionOptions, newUserId, provisionUser } from "./provision.js";
-import { EventDeduper, type HeaderMap, relayEvent, verifyForUser } from "./relay.js";
+import { GITHUB_URL, type RouterInfo, connectRouterFor, renderConnect, renderLanding, renderLinkDone, renderMessage, renderPending } from "./pages.js";
+import { type LinkPassthrough, type MaritimeProvisionOptions, newUserId, provisionUser } from "./provision.js";
+import { EventDeduper, type HeaderMap, relayEvent, relayGatewayEvent, verifyForUser } from "./relay.js";
 import { type UserRecord, type UserStore, publicUser } from "./store.js";
 import { validateSignup } from "./validate.js";
 
@@ -16,6 +17,10 @@ export interface GatewayOptions {
   signupSecret?: string;
   anthropicApiKey?: string;
   composioApiKey?: string;
+  /** Comma-separated Composio toolkits sent with the key. Default gmail,googlecalendar,googlecontacts. */
+  composioToolkits?: string;
+  /** Stripe Link credentials copied into every agent, with the redirect URI pointing at this gateway. */
+  link?: LinkPassthrough;
   logger?: Logger;
   fetchImpl?: typeof fetch;
   /** Router info cache lifetime. Default 10 minutes. */
@@ -23,6 +28,27 @@ export interface GatewayOptions {
   /** Max webhook body size in bytes. Default 1 MiB. */
   maxBodyBytes?: number;
   now?: () => number;
+  /** Per-address and global signup caps. Defaults in limits.ts. */
+  signupLimits?: Partial<SignupLimits>;
+  /** Count signups by X-Forwarded-For instead of the socket address. Only behind a proxy you control. */
+  trustProxy?: boolean;
+  /**
+   * Router info scoped to one user (an identity-key call to Inkbox's triage
+   * endpoint). Its QR is shown only when it names the user's handle. Without
+   * this the connect page shows the number and the `sms:` button, no QR.
+   */
+  routerInfoFor?: (user: UserRecord) => Promise<RouterInfo | undefined>;
+  /**
+   * Called when a signup names a phone that already has an Instinct. The
+   * response to the caller is neutral; this is the operator's chance to send
+   * the connect link to the phone itself.
+   */
+  notifyExisting?: (user: UserRecord, connectUrl: string) => Promise<void>;
+}
+
+export interface GatewayServer extends Server {
+  /** Restart provisioning for every record left in "provisioning" by an earlier process. Returns how many. */
+  resumePending(): number;
 }
 
 const JSON_TYPE = "application/json; charset=utf-8";
@@ -77,13 +103,16 @@ function wantsJson(req: IncomingMessage): boolean {
   return ct.includes("application/json") || (accept.includes("application/json") && !accept.includes("text/html"));
 }
 
-export function createGateway(opts: GatewayOptions): Server {
+export function createGateway(opts: GatewayOptions): GatewayServer {
   const log = opts.logger ?? consoleLogger;
   const now = opts.now ?? Date.now;
   const dedupe = new EventDeduper(5000);
   const routerCacheMs = opts.routerCacheMs ?? 10 * 60_000;
   const maxBody = opts.maxBodyBytes ?? 1024 * 1024;
+  const limits = signupLimits(opts.signupLimits);
+  const ipLimiter = new SlidingWindowLimiter(limits.perIp, limits.windowMs, now);
   let routerCache: { at: number; value: RouterInfo } | undefined;
+  const perUserRouter = new Map<string, { at: number; value: RouterInfo }>();
   const inFlight = new Set<string>();
 
   const relayDeps = {
@@ -106,6 +135,20 @@ export function createGateway(opts: GatewayOptions): Server {
     }
   }
 
+  async function routerInfoForUser(user: UserRecord): Promise<RouterInfo | undefined> {
+    if (!opts.routerInfoFor || !user.identityApiKey) return undefined;
+    const cached = perUserRouter.get(user.id);
+    if (cached && now() - cached.at < routerCacheMs) return cached.value;
+    try {
+      const value = await opts.routerInfoFor(user);
+      if (value) perUserRouter.set(user.id, { at: now(), value });
+      return value;
+    } catch (err) {
+      log.warn("router_info.user_failed", { userId: user.id, error: err instanceof Error ? err.message : String(err) });
+      return cached?.value;
+    }
+  }
+
   function startProvisioning(user: UserRecord): void {
     if (!opts.inkbox || inFlight.has(user.id)) return;
     inFlight.add(user.id);
@@ -116,6 +159,8 @@ export function createGateway(opts: GatewayOptions): Server {
       store: opts.store,
       anthropicApiKey: opts.anthropicApiKey,
       composioApiKey: opts.composioApiKey,
+      composioToolkits: opts.composioToolkits,
+      link: opts.link,
       fetchImpl: opts.fetchImpl,
       logger: log,
       userId: user.id,
@@ -124,8 +169,27 @@ export function createGateway(opts: GatewayOptions): Server {
       .finally(() => inFlight.delete(user.id));
   }
 
+  function resumePending(): number {
+    if (!opts.inkbox) return 0;
+    let n = 0;
+    for (const u of opts.store.all()) {
+      if (u.status !== "provisioning") continue;
+      startProvisioning(u);
+      n++;
+    }
+    if (n > 0) log.info("provision.resumed", { count: n });
+    return n;
+  }
+
   function connectUrl(userId: string): string {
     return `${opts.publicUrl.replace(/\/+$/, "")}/connect/${encodeURIComponent(userId)}`;
+  }
+
+  /** Same body for "this phone already has an Instinct" and "you asked again": nothing to learn. */
+  async function respondPending(req: IncomingMessage, res: ServerResponse, handle: string): Promise<void> {
+    if (wantsJson(req)) return json(res, 202, { status: "pending" });
+    const shared = await routerInfo();
+    return html(res, 202, renderPending(handle, connectRouterFor(handle, shared, undefined)));
   }
 
   async function handleSignup(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -143,38 +207,56 @@ export function createGateway(opts: GatewayOptions): Server {
     }
     const { value } = check;
 
+    const address = clientAddress(req, opts.trustProxy === true);
+    if (!ipLimiter.allow(address)) {
+      log.warn("signup.rate_limited", { reason: "per address" });
+      if (asJson) return json(res, 429, { error: "too many signups from this address; try again later" });
+      return html(res, 429, renderMessage("Slow down", "Too many signups from this address. Try again in a few minutes.", "error"));
+    }
+
     const byHandle = opts.store.byHandle(value.handle);
     const byPhone = opts.store.byPhone(value.phone);
-    let user: UserRecord;
     if (byHandle && byHandle.phone === value.phone) {
-      // Same person again: a retry after an error or a lost connect page.
-      user = byHandle;
-      if (user.status === "error") startProvisioning(user);
-    } else if (byHandle) {
-      if (asJson) return json(res, 409, { error: "handle taken", errors: { handle: "That handle is taken." } });
-      return html(res, 409, renderLanding({ signupEnabled: true, requireInvite: Boolean(opts.signupSecret), errors: { handle: "That handle is taken." }, values: { ...value } }));
-    } else if (byPhone) {
-      const message = "This phone already has an Instinct.";
-      if (asJson) return json(res, 409, { error: message, userId: byPhone.id, connectUrl: connectUrl(byPhone.id) });
-      res.writeHead(303, { Location: `/connect/${encodeURIComponent(byPhone.id)}` });
-      res.end();
-      return;
-    } else {
-      user = opts.store.save({
-        id: newUserId(),
-        name: value.name,
-        phone: value.phone,
-        ...(value.email ? { email: value.email } : {}),
-        handle: value.handle,
-        identityId: "",
-        identityApiKey: "",
-        signingKey: "",
-        createdAt: new Date(now()).toISOString(),
-        status: "provisioning",
-      });
-      log.info("signup.created", { userId: user.id, handle: user.handle });
-      startProvisioning(user);
+      // Same person again: a retry after an error, a crash mid-provision, or a lost connect page.
+      if (byHandle.status !== "ready") startProvisioning(byHandle);
+      void opts.notifyExisting?.(byHandle, connectUrl(byHandle.id)).catch((err: unknown) => log.warn("notify.failed", { userId: byHandle.id, error: String(err) }));
+      return respondPending(req, res, value.handle);
     }
+    if (byHandle) {
+      // Only invitees learn that a handle exists; the open form gets a generic answer.
+      if (opts.signupSecret) {
+        if (asJson) return json(res, 409, { error: "handle taken", errors: { handle: "That handle is taken." } });
+        return html(res, 409, renderLanding({ signupEnabled: true, requireInvite: true, errors: { handle: "That handle is taken." }, values: { ...value } }));
+      }
+      if (asJson) return json(res, 400, { error: "could not create" });
+      return html(res, 400, renderLanding({ signupEnabled: true, requireInvite: false, errors: { form: "Could not create an Instinct with these details. Try different ones." }, values: { ...value } }));
+    }
+    if (byPhone) {
+      void opts.notifyExisting?.(byPhone, connectUrl(byPhone.id)).catch((err: unknown) => log.warn("notify.failed", { userId: byPhone.id, error: String(err) }));
+      return respondPending(req, res, value.handle);
+    }
+
+    const pending = pendingCount(opts.store.all(), now(), limits.pendingWindowMs);
+    if (pending >= limits.maxPending) {
+      log.warn("signup.rate_limited", { reason: "pending cap", pending });
+      if (asJson) return json(res, 429, { error: "signups are paused for a moment; try again later" });
+      return html(res, 429, renderMessage("Busy", "Many people are signing up right now. Try again in an hour.", "error"));
+    }
+
+    const user = opts.store.save({
+      id: newUserId(),
+      name: value.name,
+      phone: value.phone,
+      ...(value.email ? { email: value.email } : {}),
+      handle: value.handle,
+      identityId: "",
+      identityApiKey: "",
+      signingKey: "",
+      createdAt: new Date(now()).toISOString(),
+      status: "provisioning",
+    });
+    log.info("signup.created", { userId: user.id, handle: user.handle });
+    startProvisioning(user);
 
     if (asJson) return json(res, 202, { userId: user.id, connectUrl: connectUrl(user.id), status: user.status });
     res.writeHead(303, { Location: `/connect/${encodeURIComponent(user.id)}` });
@@ -196,6 +278,21 @@ export function createGateway(opts: GatewayOptions): Server {
     void relayEvent(user, raw, headers, relayDeps).catch((err) => {
       log.error("relay.crashed", { userId, error: err instanceof Error ? err.message : String(err) });
     });
+  }
+
+  /** Link sends the browser here after approval. The code goes to the agent, which holds the PKCE verifier. */
+  async function handleLinkCallback(res: ServerResponse, userId: string, query: URLSearchParams): Promise<void> {
+    const user = opts.store.get(userId);
+    if (!user) return html(res, 404, renderMessage("Not found", "No Instinct with that id.", "error"));
+    const code = query.get("code") ?? "";
+    const state = query.get("state") ?? "";
+    const error = query.get("error") ?? undefined;
+    if (!code && !error) throw new HttpError(400, "missing code");
+    const event: Record<string, unknown> = { type: "link.oauth_callback", code, state, receivedAt: new Date(now()).toISOString() };
+    if (error) event["error"] = error;
+    const result = await relayGatewayEvent(user, event, `link:${user.id}`, relayDeps);
+    log.info("link.callback", { userId: user.id, status: result.status, reason: result.reason });
+    return html(res, result.status === "forwarded" ? 200 : 502, renderLinkDone(result.status === "forwarded"));
   }
 
   async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -224,11 +321,16 @@ export function createGateway(opts: GatewayOptions): Server {
       if (method !== "GET") throw new HttpError(405, "method not allowed");
       const user = opts.store.get(decodeURIComponent(parts[1] ?? ""));
       if (!user) return html(res, 404, renderMessage("Not found", "No Instinct with that id. Check the link you were given.", "error"));
-      return html(res, 200, renderConnect(user, await routerInfo()));
+      const [shared, perUser] = await Promise.all([routerInfo(), routerInfoForUser(user)]);
+      return html(res, 200, renderConnect(user, connectRouterFor(user.handle, shared, perUser)));
     }
     if (parts[0] === "webhooks" && parts[1] === "inkbox" && parts.length === 3) {
       if (method !== "POST") throw new HttpError(405, "method not allowed");
       return handleWebhook(req, res, decodeURIComponent(parts[2] ?? ""));
+    }
+    if (parts[0] === "oauth" && parts[1] === "link" && parts[2] === "callback" && parts.length === 4) {
+      if (method !== "GET") throw new HttpError(405, "method not allowed");
+      return handleLinkCallback(res, decodeURIComponent(parts[3] ?? ""), url.searchParams);
     }
     throw new HttpError(404, "not found");
   }
@@ -242,5 +344,5 @@ export function createGateway(opts: GatewayOptions): Server {
       json(res, status, { error: message });
     });
   });
-  return server;
+  return Object.assign(server, { resumePending });
 }

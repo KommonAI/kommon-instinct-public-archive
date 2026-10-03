@@ -38,13 +38,17 @@ describe("UserStore", () => {
     expect(parsed.users.map((u: { id: string }) => u.id)).toEqual(["b"]);
   });
 
-  it("publicUser strips secrets", () => {
-    const pub = publicUser(readyUser());
+  it("publicUser strips secrets, the name and the error text", () => {
+    const pub = publicUser(readyUser({ status: "error", error: "Maritime 402: wallet empty for Maria" }));
     const text = JSON.stringify(pub);
     expect(text).not.toContain("ik_secret");
     expect(text).not.toContain("whsec_");
     expect(text).not.toContain("+14155550123");
-    expect(pub["status"]).toBe("ready");
+    expect(text).not.toContain("Maria");
+    expect(text).not.toContain("402");
+    expect(pub["status"]).toBe("error");
+    expect(pub["hasError"]).toBe(true);
+    expect(publicUser(readyUser())["status"]).toBe("ready");
     expect(maskPhone("+14155550123")).toBe("+1••••••0123");
   });
 });

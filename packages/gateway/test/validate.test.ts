@@ -25,6 +25,15 @@ describe("validateSignup", () => {
     expect(validateSignup({ name: "S", phone: "+04155550123", handle: "sam" }).ok).toBe(false);
   });
 
+  it("refuses the reserved handle `owner` in any spelling", () => {
+    for (const handle of ["owner", "@owner", " Owner "]) {
+      const r = validateSignup({ name: "S", phone: "+14155550123", handle });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errors["handle"]).toMatch(/reserved/);
+    }
+    expect(validateSignup({ name: "S", phone: "+14155550123", handle: "owner-2" }).ok).toBe(true);
+  });
+
   it("checks the invite code only when configured", () => {
     expect(validateSignup({ name: "S", phone: "+14155550123", handle: "sam" }, { signupSecret: "letmein" }).ok).toBe(false);
     expect(validateSignup({ name: "S", phone: "+14155550123", handle: "sam", inviteCode: "letmein" }, { signupSecret: "letmein" }).ok).toBe(true);

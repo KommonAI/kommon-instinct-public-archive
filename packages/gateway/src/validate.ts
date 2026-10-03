@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { isReservedHandle } from "@open-instinct/core";
 
 export const HANDLE_RE = /^[a-z0-9-]{3,40}$/;
 export const E164_RE = /^\+[1-9]\d{6,14}$/;
@@ -55,6 +56,8 @@ export function validateSignup(input: Record<string, unknown>, opts: { signupSec
   if (!E164_RE.test(phone)) errors["phone"] = "Phone must be a full number with country code, like +14155550123.";
   if (emailRaw && !isEmail(emailRaw)) errors["email"] = "Email does not look valid.";
   if (!HANDLE_RE.test(handle)) errors["handle"] = "Handle must be 3 to 40 characters: lowercase letters, digits and dashes.";
+  // `owner` names the person behind every agent; core refuses it as a contact handle too.
+  else if (isReservedHandle(handle)) errors["handle"] = `"${handle}" is reserved. Pick another handle.`;
   if (opts.signupSecret && !secretMatches(inviteCode, opts.signupSecret)) errors["inviteCode"] = "Invite code is not valid.";
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };

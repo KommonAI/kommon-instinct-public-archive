@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContactStore, Scheduler, StateDir, loadPolicy, type InstinctConfig } from "@open-instinct/core";
-import { COMMAND_NAMES } from "../src/cli.js";
+import { COMMAND_NAMES, keepsRunning } from "../src/cli.js";
 import { fakeFetch, json, readJson, run, tmpDir } from "./helpers.js";
 
 describe("help", () => {
@@ -19,6 +19,13 @@ describe("help", () => {
     expect(r.code).toBe(0);
     expect(r.out).toContain("trust list | set <contact> <tier>");
     expect(r.out).toContain("example");
+    const deploy = await run(["deploy", "--help"]);
+    expect(deploy.out).toContain("--maritime-llm");
+    expect(deploy.out).toContain("LINK_CLIENT_ID");
+    const init = await run(["init", "--help"]);
+    expect(init.out).toContain("--toolkits");
+    const payments = await run(["payments", "--help"]);
+    expect(payments.out).toContain("payments connect | status");
   });
 
   it("rejects unknown commands with exit 2", async () => {
@@ -78,6 +85,51 @@ describe("init", () => {
     const r = await run(["init"], { INSTINCT_DATA_DIR: tmpDir() });
     expect(r.code).toBe(2);
     expect(r.err).toContain("--name is required");
+  });
+
+  it("refuses the reserved handle `owner` and writes nothing", async () => {
+    const dir = tmpDir();
+    for (const handle of ["owner", "@Owner"]) {
+      const r = await run(["init", "--name", "Maria", "--handle", handle, "--skip-inkbox"], { INSTINCT_DATA_DIR: dir });
+      expect(r.code).toBe(2);
+      expect(r.err).toContain("reserved");
+    }
+    expect(fs.existsSync(path.join(dir, "config.json"))).toBe(false);
+    const ok = await run(["init", "--name", "Maria", "--handle", "owner-2", "--skip-inkbox"], { INSTINCT_DATA_DIR: dir });
+    expect(ok.code).toBe(0);
+  });
+
+  it("turns Composio apps on from --apps, --toolkits or a COMPOSIO_API_KEY in env, also on re-run", async () => {
+    const dir = tmpDir();
+    await run(["init", "--name", "Maria"], { INSTINCT_DATA_DIR: dir });
+    expect(readJson<InstinctConfig>(dir, "config.json").apps.enabled).toBe(false);
+
+    // config.json exists now, so core's env seeding no longer applies; init must do it.
+    const viaEnv = await run(["init", "--name", "Maria"], { INSTINCT_DATA_DIR: dir, COMPOSIO_API_KEY: "cmp" });
+    expect(viaEnv.code, viaEnv.err).toBe(0);
+    expect(viaEnv.out).toContain("apps   on");
+    let config = readJson<InstinctConfig>(dir, "config.json");
+    expect(config.apps.enabled).toBe(true);
+    expect(config.apps.toolkits).toEqual(["gmail", "googlecalendar", "googlecontacts"]);
+
+    await run(["init", "--name", "Maria", "--toolkits", "Gmail, slack"], { INSTINCT_DATA_DIR: dir });
+    config = readJson<InstinctConfig>(dir, "config.json");
+    expect(config.apps.toolkits).toEqual(["gmail", "slack"]);
+    expect(config.apps.enabled).toBe(true);
+
+    await run(["init", "--name", "Maria"], { INSTINCT_DATA_DIR: dir, COMPOSIO_TOOLKITS: "notion" });
+    expect(readJson<InstinctConfig>(dir, "config.json").apps.toolkits).toEqual(["notion"]);
+
+    const off = await run(["init", "--name", "Maria", "--no-apps"], { INSTINCT_DATA_DIR: dir, COMPOSIO_API_KEY: "cmp" });
+    expect(off.code, off.err).toBe(0);
+    config = readJson<InstinctConfig>(dir, "config.json");
+    expect(config.apps.enabled).toBe(false);
+    expect(config.apps.toolkits).toEqual(["notion"]);
+
+    const fresh = tmpDir();
+    await run(["init", "--name", "Maria", "--apps"], { INSTINCT_DATA_DIR: fresh });
+    expect(readJson<InstinctConfig>(fresh, "config.json").apps.enabled).toBe(true);
+    expect((await run(["init", "--name", "Maria", "--apps", "--no-apps"], { INSTINCT_DATA_DIR: fresh })).code).toBe(2);
   });
 });
 
@@ -242,16 +294,70 @@ describe("deploy", () => {
     expect(body.name).toBe("instinct-maria-instinct");
     expect(body.framework).toBe("custom");
     expect(body.desktop).toBe(true);
-    expect(body.exposedPort).toBe(8080);
+    // Maritime injects PORT=18789 for framework "custom"; the exposed port must be the same number.
+    expect(body.exposedPort).toBe(18789);
+    expect(body.useMaritimeLlm).toBeUndefined();
     expect(body.healthCheckPath).toBe("/health");
     expect(body.externalId).toBe("open-instinct:maria-instinct");
     expect(body.idleTtlSeconds).toBe(900);
     const vars = Object.fromEntries(body.initialEnvVars.map((v: { key: string; value: string; isSecret: boolean }) => [v.key, v]));
+    expect(vars.PORT).toEqual({ key: "PORT", value: String(body.exposedPort), isSecret: false });
     expect(vars.INKBOX_API_KEY).toEqual({ key: "INKBOX_API_KEY", value: "<redacted>", isSecret: true });
     expect(vars.ANTHROPIC_API_KEY.value).toBe("<redacted>");
     expect(vars.INSTINCT_OWNER_PHONE).toEqual({ key: "INSTINCT_OWNER_PHONE", value: "+14155550100", isSecret: false });
     expect(vars.INSTINCT_DATA_DIR.value).toBe("/data");
+    expect(vars.INSTINCT_MODEL.value).toBe("anthropic/claude-fable-5-1");
+    expect(vars.LINK_CLIENT_ID).toBeUndefined();
     expect(r.out).not.toContain("ik_secret");
+  });
+
+  it("--maritime-llm asks Maritime for its metered model and points INSTINCT_MODEL at it", async () => {
+    const dir = await seeded();
+    const r = await run(["deploy", "--image", "img:1", "--maritime-llm", "--dry-run"], { INSTINCT_DATA_DIR: dir, OPENAI_API_KEY: "sk-mine", OPENAI_BASE_URL: "http://mine" });
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).not.toContain("no model");
+    const body = JSON.parse(r.out);
+    expect(body.useMaritimeLlm).toBe(true);
+    const vars = Object.fromEntries(body.initialEnvVars.map((v: { key: string; value: string }) => [v.key, v.value]));
+    expect(vars.INSTINCT_MODEL).toBe("openai-compatible/gpt-5.4");
+    // Our own OPENAI_* would shadow the injected proxy credentials, so they stay home.
+    expect(vars.OPENAI_API_KEY).toBeUndefined();
+    expect(vars.OPENAI_BASE_URL).toBeUndefined();
+
+    const picked = await run(["deploy", "--image", "img:1", "--maritime-llm", "--model", "gpt-5.5", "--dry-run"], { INSTINCT_DATA_DIR: dir, INSTINCT_MARITIME_MODEL: "gpt-5" });
+    expect(JSON.parse(picked.out).initialEnvVars.find((v: { key: string }) => v.key === "INSTINCT_MODEL").value).toBe("openai-compatible/gpt-5.5");
+    const fromEnv = await run(["deploy", "--image", "img:1", "--maritime-llm", "--dry-run"], { INSTINCT_DATA_DIR: dir, INSTINCT_MARITIME_MODEL: "gpt-5" });
+    expect(JSON.parse(fromEnv.out).initialEnvVars.find((v: { key: string }) => v.key === "INSTINCT_MODEL").value).toBe("openai-compatible/gpt-5");
+
+    // Without the flag and without any key, the warning names the flag.
+    const none = await run(["deploy", "--image", "img:1", "--dry-run"], { INSTINCT_DATA_DIR: dir });
+    expect(none.err).toContain("--maritime-llm");
+    expect(JSON.parse(none.out).useMaritimeLlm).toBeUndefined();
+  });
+
+  it("passes LINK_* and STRIPE_PUBLISHABLE_KEY into the agent when LINK_CLIENT_ID is set", async () => {
+    const dir = await seeded();
+    const r = await run(["deploy", "--image", "img:1", "--dry-run"], {
+      INSTINCT_DATA_DIR: dir,
+      ANTHROPIC_API_KEY: "sk",
+      LINK_CLIENT_ID: "lc_1",
+      LINK_CLIENT_SECRET: "ls_1",
+      LINK_REDIRECT_URI: "https://gw.example.com/oauth/link/callback/usr_1",
+      STRIPE_PUBLISHABLE_KEY: "pk_test_1",
+    });
+    expect(r.code, r.err).toBe(0);
+    const vars = Object.fromEntries(JSON.parse(r.out).initialEnvVars.map((v: { key: string; value: string; isSecret: boolean }) => [v.key, v]));
+    expect(vars.LINK_CLIENT_ID).toEqual({ key: "LINK_CLIENT_ID", value: "lc_1", isSecret: false });
+    expect(vars.LINK_CLIENT_SECRET).toEqual({ key: "LINK_CLIENT_SECRET", value: "<redacted>", isSecret: true });
+    expect(vars.LINK_REDIRECT_URI.value).toBe("https://gw.example.com/oauth/link/callback/usr_1");
+    expect(vars.STRIPE_PUBLISHABLE_KEY).toEqual({ key: "STRIPE_PUBLISHABLE_KEY", value: "pk_test_1", isSecret: false });
+    expect(r.err).not.toContain("LINK_REDIRECT_URI");
+
+    const noRedirect = await run(["deploy", "--image", "img:1", "--dry-run"], { INSTINCT_DATA_DIR: dir, ANTHROPIC_API_KEY: "sk", LINK_CLIENT_ID: "lc_1" });
+    expect(noRedirect.err).toContain("LINK_REDIRECT_URI");
+    // A secret without a client id is not copied: it would be useless and leak for nothing.
+    const orphan = await run(["deploy", "--image", "img:1", "--dry-run"], { INSTINCT_DATA_DIR: dir, ANTHROPIC_API_KEY: "sk", LINK_CLIENT_SECRET: "ls_1" });
+    expect(JSON.parse(orphan.out).initialEnvVars.some((v: { key: string }) => v.key.startsWith("LINK_"))).toBe(false);
   });
 
   it("creates the agent through POST /api/agents and records the id", async () => {
@@ -377,5 +483,112 @@ describe("dev", () => {
     expect(r.code, r.err).toBe(0);
     expect(seen.listened).toBeDefined();
     expect(r.err).toContain("tunnel not started");
+  });
+
+  it("warns when COMPOSIO_API_KEY is set but config.json has apps off, and names the fix", async () => {
+    const dir = tmpDir();
+    await run(["init", "--name", "Maria"], { INSTINCT_DATA_DIR: dir });
+    const { mod } = fakeServer();
+    const r = await run(["dev"], { INSTINCT_DATA_DIR: dir, COMPOSIO_API_KEY: "cmp" }, { importServer: async () => mod, installSignalHandlers: false });
+    expect(r.code, r.err).toBe(0);
+    expect(r.err).toContain("apps.enabled=false");
+    expect(r.err).toContain("--apps");
+
+    await run(["init", "--name", "Maria", "--apps"], { INSTINCT_DATA_DIR: dir });
+    const quiet = await run(["dev"], { INSTINCT_DATA_DIR: dir, COMPOSIO_API_KEY: "cmp" }, { importServer: async () => mod, installSignalHandlers: false });
+    expect(quiet.err).not.toContain("apps.enabled");
+    const noKey = await run(["dev"], { INSTINCT_DATA_DIR: tmpDir() }, { importServer: async () => mod, installSignalHandlers: false });
+    expect(noKey.err).not.toContain("apps.enabled");
+  });
+
+  it("is the only command the binary keeps alive, wherever --data-dir sits", async () => {
+    expect(keepsRunning(["dev"])).toBe(true);
+    expect(keepsRunning(["--data-dir", "./x", "dev", "--tunnel"])).toBe(true);
+    expect(keepsRunning(["--data-dir=./x", "dev"])).toBe(true);
+    expect(keepsRunning(["dev", "--data-dir", "./x"])).toBe(true);
+    expect(keepsRunning(["--data-dir", "dev"])).toBe(false);
+    expect(keepsRunning(["chat", "dev"])).toBe(false);
+    expect(keepsRunning(["--data-dir"])).toBe(false);
+    expect(keepsRunning([])).toBe(false);
+  });
+});
+
+describe("payments", () => {
+  it("connect prints the authorize URL the running server offers", async () => {
+    const { fetch, calls } = fakeFetch({
+      "http://127.0.0.1:8080/oauth/link/start": () => json({ url: "https://login.link.com/auth?client_id=lc_1&state=srv" }),
+    });
+    const r = await run(["payments", "connect"], { INSTINCT_DATA_DIR: tmpDir() }, { fetchImpl: fetch });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toContain("https://login.link.com/auth?client_id=lc_1&state=srv");
+    expect(r.err).toBe("");
+    expect(calls[0]!.url).toBe("http://127.0.0.1:8080/oauth/link/start");
+
+    const redirecting = fakeFetch({
+      "http://localhost:9000/oauth/link/start": () => new Response(null, { status: 302, headers: { Location: "https://login.link.com/auth?x=1" } }),
+    });
+    const r2 = await run(["payments", "connect", "--url", "http://localhost:9000"], { INSTINCT_DATA_DIR: tmpDir() }, { fetchImpl: redirecting.fetch });
+    expect(r2.code, r2.err).toBe(0);
+    expect(r2.out).toContain("https://login.link.com/auth?x=1");
+  });
+
+  it("connect falls back to LINK_CLIENT_ID when the server has no Link route, and fails clearly without either", async () => {
+    const { fetch } = fakeFetch({ "http://127.0.0.1:8080/oauth/link/start": () => json({ error: "not found" }, 404) });
+    const r = await run(["payments", "connect"], { INSTINCT_DATA_DIR: tmpDir(), LINK_CLIENT_ID: "lc_1", LINK_REDIRECT_URI: "https://gw.example.com/oauth/link/callback/usr_1" }, { fetchImpl: fetch });
+    expect(r.code, r.err).toBe(0);
+    const url = new URL(r.out.trim());
+    expect(url.origin + url.pathname).toBe("https://login.link.com/auth");
+    expect(url.searchParams.get("client_id")).toBe("lc_1");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://gw.example.com/oauth/link/callback/usr_1");
+    expect(url.searchParams.get("scope")).toBe("payment_methods.agentic");
+    expect(url.searchParams.get("response_type")).toBe("code");
+    expect(url.searchParams.get("state")).toMatch(/^[0-9a-f]{24}$/);
+    expect(r.err).toContain("built from LINK_CLIENT_ID");
+
+    const none = await run(["payments", "connect"], { INSTINCT_DATA_DIR: tmpDir() }, { fetchImpl: fetch });
+    expect(none.code).toBe(1);
+    expect(none.err).toContain("LINK_CLIENT_ID");
+
+    const down = fakeFetch({});
+    down.fetch = (async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const unreachable = await run(["payments", "connect"], { INSTINCT_DATA_DIR: tmpDir(), LINK_CLIENT_ID: "lc" }, { fetchImpl: down.fetch });
+    expect(unreachable.code).toBe(1);
+    expect(unreachable.err).toContain("instinct dev");
+  });
+
+  it("status prints the server's payments report and the local LINK_* configuration", async () => {
+    const { fetch } = fakeFetch({ "http://127.0.0.1:8080/payments/status": () => json({ connected: true, wallet: "link", expiresAt: "2026-10-04T00:00:00Z" }) });
+    const r = await run(["payments", "status"], { INSTINCT_DATA_DIR: tmpDir(), LINK_CLIENT_ID: "lc_1" }, { fetchImpl: fetch });
+    expect(r.code, r.err).toBe(0);
+    expect(r.out).toMatch(/connected\s+true/);
+    expect(r.out).toMatch(/wallet\s+link/);
+    expect(r.out).toMatch(/LINK_CLIENT_ID\s+set/);
+    expect(r.out).toMatch(/LINK_CLIENT_SECRET\s+missing/);
+    expect(r.out).not.toContain("lc_1");
+
+    const old = fakeFetch({
+      "http://127.0.0.1:8080/payments/status": () => json({ error: "not found" }, 404),
+      "http://127.0.0.1:8080/": () => json({ ok: true, payments: { connected: false } }),
+    });
+    const r2 = await run(["payments", "status"], { INSTINCT_DATA_DIR: tmpDir() }, { fetchImpl: old.fetch });
+    expect(r2.code, r2.err).toBe(0);
+    expect(r2.out).toMatch(/connected\s+false/);
+
+    const bare = fakeFetch({
+      "http://127.0.0.1:8080/payments/status": () => json({ error: "not found" }, 404),
+      "http://127.0.0.1:8080/": () => json({ ok: true }),
+    });
+    const r3 = await run(["payments", "status"], { INSTINCT_DATA_DIR: tmpDir() }, { fetchImpl: bare.fetch });
+    expect(r3.code, r3.err).toBe(0);
+    expect(r3.out).toContain("does not report payments");
+  });
+
+  it("needs a subcommand", async () => {
+    const r = await run(["payments"], { INSTINCT_DATA_DIR: tmpDir() });
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("connect | status");
+    expect((await run(["payments", "refund"], { INSTINCT_DATA_DIR: tmpDir() })).code).toBe(2);
   });
 });

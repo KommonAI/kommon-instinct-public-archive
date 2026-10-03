@@ -7,6 +7,15 @@ import { CliError } from "./io.js";
 
 export const MARITIME_API_URL = "https://api.maritime.sh";
 export const MARITIME_APP_URL = "https://maritime.sh";
+/**
+ * The port Maritime injects as $PORT for framework "custom" (8080 is taken inside
+ * the VM). The create body sends it as `exposedPort` and as an explicit PORT env
+ * var so the two can never disagree. packages/gateway/src/provision.ts has the
+ * same constant for multi-user signups.
+ */
+export const MARITIME_AGENT_PORT = 18789;
+/** A model id Maritime's metered OpenAI-compatible proxy serves. Override with --model or INSTINCT_MARITIME_MODEL. */
+export const DEFAULT_MARITIME_LLM_MODEL = "gpt-5.4";
 
 export interface MaritimeEnvVar {
   key: string;
@@ -25,6 +34,8 @@ export interface CreateAgentBody {
   initialEnvVars: MaritimeEnvVar[];
   idleTtlSeconds: number;
   instructions: string;
+  /** Ask Maritime to inject OPENAI_API_KEY and OPENAI_BASE_URL for its metered LLM proxy. */
+  useMaritimeLlm?: boolean;
 }
 
 export interface CreatedAgent {

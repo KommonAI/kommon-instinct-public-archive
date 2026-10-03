@@ -80,11 +80,12 @@ export class InkboxA2A {
   private readonly rest: RestClient;
   private nextRpcId = 0;
 
-  constructor(opts: { apiKey: string; handle: string; baseUrl?: string; fetchImpl?: typeof fetch }) {
+  constructor(opts: { apiKey: string; handle: string; baseUrl?: string; fetchImpl?: typeof fetch; sleep?: (ms: number) => Promise<void> }) {
     this.handle = opts.handle.replace(/^@+/, "");
     const restOpts: Parameters<typeof createRest>[0] = { apiKey: opts.apiKey };
     if (opts.baseUrl) restOpts.baseUrl = opts.baseUrl;
     if (opts.fetchImpl) restOpts.fetchImpl = opts.fetchImpl;
+    if (opts.sleep) restOpts.sleep = opts.sleep;
     this.rest = createRest(restOpts);
   }
 

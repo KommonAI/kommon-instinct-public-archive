@@ -81,6 +81,20 @@ export class MemoryStore {
   }
 
   /**
+   * The owner's preferences only: the body of a `## Preferences` heading in MEMORY.md
+   * (case-insensitive, any heading level), up to `maxChars`. Non-owners who may know the
+   * owner's preferences get this and nothing else from memory. Returns "" when there is no
+   * such section, so an unstructured MEMORY.md never leaks.
+   */
+  preferencesDigest(maxChars = 1500): string {
+    const durable = this.readDurable();
+    const match = /^(#{1,6})\s*preferences\b[^\n]*\n([\s\S]*?)(?=^#{1,6}\s|(?![\s\S]))/im.exec(durable);
+    const body = match?.[2]?.trim() ?? "";
+    if (!body) return "";
+    return head(body, maxChars);
+  }
+
+  /**
    * What the model sees every turn: the start of MEMORY.md and the end of the last
    * two days of journal. The budget is split 60/25/15 so durable facts win.
    */

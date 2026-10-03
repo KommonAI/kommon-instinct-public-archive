@@ -5,6 +5,17 @@ import { type UserRecord, type UserStore } from "./store.js";
 
 export const DEFAULT_MARITIME_BASE_URL = "https://api.maritime.sh";
 export const DEFAULT_IDLE_TTL_SECONDS = 900;
+/**
+ * The port Maritime injects as $PORT for framework "custom" (port 8080 is taken
+ * inside the VM). The create body sends the same value as `exposedPort` and as an
+ * explicit PORT env var, so the recorded port always equals the bound port.
+ * packages/cli/src/maritime.ts carries the same constant for `instinct deploy`.
+ */
+export const MARITIME_AGENT_PORT = 18789;
+/** Matches deploy/.env.example and core's DEFAULT_TOOLKITS. */
+export const DEFAULT_COMPOSIO_TOOLKITS = "gmail,googlecalendar,googlecontacts";
+/** A model id Maritime's metered OpenAI-compatible proxy serves. Override with INSTINCT_MARITIME_MODEL. */
+export const DEFAULT_MARITIME_LLM_MODEL = "gpt-5.4";
 
 export interface ProvisionInput {
   name: string;
@@ -21,21 +32,40 @@ export interface MaritimeProvisionOptions {
   /** Extra env vars for every agent (model keys, feature flags). Keys that look like secrets are marked secret. */
   extraEnv?: Record<string, string>;
   idleTtlSeconds?: number;
+  /** Ask Maritime to inject its metered LLM credentials and point INSTINCT_MODEL at them. */
+  useMaritimeLlm?: boolean;
+  /** Model id behind `openai-compatible/`. Default DEFAULT_MARITIME_LLM_MODEL. */
+  maritimeModel?: string;
+}
+
+/** Stripe Link Agent Wallet credentials handed to every agent so it can pay for things. */
+export interface LinkPassthrough {
+  clientId: string;
+  clientSecret?: string;
+  stripePublishableKey?: string;
 }
 
 export interface ProvisionDeps {
   inkbox: InkboxProvisioner;
   maritime: MaritimeProvisionOptions;
-  /** Public base URL of this gateway, used for the webhook subscription. */
+  /** Public base URL of this gateway, used for the webhook subscription and OAuth redirects. */
   publicUrl: string;
   store: UserStore;
   anthropicApiKey?: string;
   composioApiKey?: string;
+  /** Comma-separated Composio toolkit slugs. Only sent with composioApiKey. Default DEFAULT_COMPOSIO_TOOLKITS. */
+  composioToolkits?: string;
+  link?: LinkPassthrough;
   fetchImpl?: typeof fetch;
   logger?: Logger;
   /** Resume a record the server already created. Otherwise the record is found by handle or created. */
   userId?: string;
 }
+
+/** What agentEnvFor and maritimeCreateBody need from the deps. */
+export type AgentEnvDeps = Pick<ProvisionDeps, "anthropicApiKey" | "composioApiKey" | "composioToolkits" | "maritime" | "link"> & {
+  publicUrl?: string;
+};
 
 export interface EnvVarInput {
   key: string;
@@ -51,6 +81,11 @@ export function webhookUrlFor(publicUrl: string, userId: string): string {
   return `${publicUrl.replace(/\/+$/, "")}/webhooks/inkbox/${encodeURIComponent(userId)}`;
 }
 
+/** Where Link sends the browser after the owner approves the wallet connection. */
+export function linkRedirectUriFor(publicUrl: string, userId: string): string {
+  return `${publicUrl.replace(/\/+$/, "")}/oauth/link/callback/${encodeURIComponent(userId)}`;
+}
+
 /** The persona Maritime shows in its dashboard. The agent's real prompt is built in core. */
 export function personaFor(input: { name: string; handle: string }): string {
   return (
@@ -63,8 +98,9 @@ export function personaFor(input: { name: string; handle: string }): string {
 
 const SECRET_KEY_RE = /(KEY|SECRET|TOKEN|PASSWORD)/i;
 
-export function agentEnvFor(user: UserRecord, deps: Pick<ProvisionDeps, "anthropicApiKey" | "composioApiKey" | "maritime">): EnvVarInput[] {
+export function agentEnvFor(user: UserRecord, deps: AgentEnvDeps): EnvVarInput[] {
   const env: EnvVarInput[] = [
+    { key: "PORT", value: String(MARITIME_AGENT_PORT), isSecret: false },
     { key: "INKBOX_API_KEY", value: user.identityApiKey, isSecret: true },
     { key: "INKBOX_AGENT_HANDLE", value: user.handle, isSecret: false },
     { key: "INKBOX_IDENTITY_ID", value: user.identityId, isSecret: false },
@@ -73,7 +109,20 @@ export function agentEnvFor(user: UserRecord, deps: Pick<ProvisionDeps, "anthrop
   ];
   if (user.email) env.push({ key: "INSTINCT_OWNER_EMAIL", value: user.email, isSecret: false });
   if (deps.anthropicApiKey) env.push({ key: "ANTHROPIC_API_KEY", value: deps.anthropicApiKey, isSecret: true });
-  if (deps.composioApiKey) env.push({ key: "COMPOSIO_API_KEY", value: deps.composioApiKey, isSecret: true });
+  if (deps.composioApiKey) {
+    env.push({ key: "COMPOSIO_API_KEY", value: deps.composioApiKey, isSecret: true });
+    // core only enables apps when COMPOSIO_TOOLKITS is non-empty; the key alone does nothing.
+    env.push({ key: "COMPOSIO_TOOLKITS", value: deps.composioToolkits?.trim() || DEFAULT_COMPOSIO_TOOLKITS, isSecret: false });
+  }
+  if (deps.maritime.useMaritimeLlm) {
+    env.push({ key: "INSTINCT_MODEL", value: `openai-compatible/${deps.maritime.maritimeModel?.trim() || DEFAULT_MARITIME_LLM_MODEL}`, isSecret: false });
+  }
+  if (deps.link) {
+    env.push({ key: "LINK_CLIENT_ID", value: deps.link.clientId, isSecret: false });
+    if (deps.link.clientSecret) env.push({ key: "LINK_CLIENT_SECRET", value: deps.link.clientSecret, isSecret: true });
+    if (deps.link.stripePublishableKey) env.push({ key: "STRIPE_PUBLISHABLE_KEY", value: deps.link.stripePublishableKey, isSecret: false });
+    if (deps.publicUrl) env.push({ key: "LINK_REDIRECT_URI", value: linkRedirectUriFor(deps.publicUrl, user.id), isSecret: false });
+  }
   env.push({ key: "INSTINCT_COMPUTER", value: "auto", isSecret: false });
   for (const [key, value] of Object.entries(deps.maritime.extraEnv ?? {})) {
     if (env.some((e) => e.key === key)) continue;
@@ -82,18 +131,19 @@ export function agentEnvFor(user: UserRecord, deps: Pick<ProvisionDeps, "anthrop
   return env;
 }
 
-export function maritimeCreateBody(user: UserRecord, deps: Pick<ProvisionDeps, "anthropicApiKey" | "composioApiKey" | "maritime">): Record<string, unknown> {
+export function maritimeCreateBody(user: UserRecord, deps: AgentEnvDeps): Record<string, unknown> {
   return {
     name: `instinct-${user.handle}`,
     framework: "custom",
     imageName: deps.maritime.agentImage,
-    exposedPort: 8080,
+    exposedPort: MARITIME_AGENT_PORT,
     healthCheckPath: "/health",
     desktop: true,
     externalId: user.id,
     idleTtlSeconds: deps.maritime.idleTtlSeconds ?? DEFAULT_IDLE_TTL_SECONDS,
     instructions: personaFor(user),
     initialEnvVars: agentEnvFor(user, deps),
+    ...(deps.maritime.useMaritimeLlm ? { useMaritimeLlm: true } : {}),
   };
 }
 

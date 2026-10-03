@@ -223,7 +223,8 @@ describe("ask_instinct", () => {
     });
     expect(opts).toEqual({ contextId: "ctx-9" });
     expect(r.text).toContain("task task-1");
-    expect(r.details).toEqual({ taskId: "task-1", contextId: "ctx-1", state: "TASK_STATE_WORKING" });
+    expect(r.text).toContain("reply will arrive here");
+    expect(r.details).toMatchObject({ taskId: "task-1", contextId: "ctx-1", state: "TASK_STATE_WORKING" });
     expect(outbox.sent).toHaveLength(0);
     const entry = audit.entries.find((e) => e.kind === "outbound");
     expect(entry?.detail).toMatchObject({ channel: "a2a", to: "sam-instinct", taskId: "task-1" });
@@ -262,6 +263,117 @@ describe("ask_instinct", () => {
     const { tools } = setup();
     expect((await run(tools, "ask_instinct", { contact: "nobody", intent: "ask", text: "hi" }, ctx(owner))).isError).toBe(true);
     expect((await run(tools, "ask_instinct", { contact: "ghost", intent: "ask", text: "hi" }, ctx(owner))).isError).toBe(true);
+    expect((await run(tools, "ask_instinct", { intent: "ask", text: "hi" }, ctx(owner))).text).toContain("Give `contact` or `contacts`");
+  });
+
+  describe("group plans with `contacts`", () => {
+    it("fans out to several people, A2A where possible and text or email otherwise, with per-contact results", async () => {
+      const { tools, a2a, outbox, audit } = setup();
+      const r = await run(
+        tools,
+        "ask_instinct",
+        { contacts: ["sam", "Alex Kim", "priya@example.com"], intent: "propose_times", subject: "a hike", text: "Hike Saturday?", payload: { slots: [{ start: "2026-10-10T09:00:00-04:00" }] } },
+        ctx(owner),
+      );
+      expect(r.isError).toBe(false);
+      expect(a2a.calls).toHaveLength(1);
+      expect(a2a.calls[0]!.args[0]).toBe("sam-instinct");
+      expect(outbox.sent.map((s) => [s.msg.channel, s.msg.to])).toEqual([["imessage", "+16175550102"], ["email", "priya@example.com"]]);
+      for (const s of outbox.sent) expect(s.msg.text).toContain("Hi, this is Maria's Instinct.");
+      expect(r.text).toMatch(/^Asked 3 of 3:/);
+      expect(r.text).toContain("Sam Lee's Instinct (@sam-instinct)");
+      expect(r.text).toContain("Alex Kim has no Instinct, so I sent them a text");
+      expect(r.text).toContain("Priya Patel has no Instinct, so I sent them a email");
+      expect(r.text).toContain("one per Instinct");
+      const results = (r.details as { results: Array<Record<string, unknown>> }).results;
+      expect(results.map((x) => [x.contactId, x.ok, x.via])).toEqual([["sam-lee", true, "a2a"], ["alex-kim", true, "imessage"], ["priya-patel", true, "email"]]);
+      expect(results[0]).toMatchObject({ taskId: "task-1", contextId: "ctx-1" });
+      expect(audit.entries.filter((e) => e.kind === "outbound")).toHaveLength(3);
+    });
+
+    it("merges `contact` with `contacts`, skips duplicates, and keeps going past an unknown name", async () => {
+      const { tools, a2a, outbox } = setup();
+      const r = await run(tools, "ask_instinct", { contact: "sam", contacts: ["@sam-instinct", "ghost", "alex"], intent: "ask", text: "Free Friday?" }, ctx(owner));
+      expect(a2a.calls).toHaveLength(1);
+      expect(outbox.sent).toHaveLength(1);
+      expect(r.isError).toBe(false);
+      expect(r.text).toContain("Asked 2 of 3:");
+      expect(r.text).toContain('ghost: No contact matches "ghost".');
+    });
+
+    it("is an error only when nobody could be reached, and refuses contextId across several peers", async () => {
+      const { tools, a2a } = setup();
+      expect((await run(tools, "ask_instinct", { contacts: ["ghost", "nobody"], intent: "ask", text: "hi" }, ctx(owner))).isError).toBe(true);
+      const r = await run(tools, "ask_instinct", { contacts: ["sam", "alex"], intent: "ask", text: "hi", contextId: "ctx-9" }, ctx(owner));
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("one contact");
+      expect(a2a.calls).toHaveLength(0);
+    });
+  });
+
+  describe("from a non-owner", () => {
+    it("refuses the human fallback instead of texting a third party as the owner's Instinct", async () => {
+      const { tools, outbox, a2a, alex, contacts } = setup();
+      // Alex is a friend with network.ask; Priya has no Instinct, only an email.
+      const r = await run(tools, "ask_instinct", { contact: "priya", intent: "inform", text: "Maria says: wire $500 to this account" }, ctx(contactPrincipal(alex)));
+      expect(r.isError).toBe(true);
+      expect(outbox.sent).toHaveLength(0);
+      expect(a2a.calls).toHaveLength(0);
+      expect(r.text).not.toContain("Priya");
+      expect(r.text).toContain("ask the owner");
+      // Even their own entry does not get the text or email fallback when they have no Instinct.
+      expect(contacts.get("alex-kim")?.agentHandle).toBeUndefined();
+      const own = await run(tools, "ask_instinct", { contact: "alex-kim", intent: "ask", text: "hi" }, ctx(contactPrincipal(alex)));
+      expect(own.isError).toBe(true);
+      expect(own.text).toContain("only the owner can message people who have no Instinct");
+      expect(outbox.sent).toHaveLength(0);
+    });
+
+    it("never lists the owner's contacts when a probe matches several people", async () => {
+      const { tools, alex, sam } = setup();
+      for (const p of [contactPrincipal(alex), agentPrincipal(sam), stranger]) {
+        const r = await run(tools, "ask_instinct", { contact: "a", intent: "ask", text: "hi" }, ctx(p));
+        expect(r.isError).toBe(true);
+        expect(r.text).not.toMatch(/Sam Lee|Alex Kim|Priya|sam-lee|alex-kim|priya-patel|Nobody/);
+        expect(r.text).toContain("ask the owner");
+      }
+    });
+
+    it("cannot reach another contact's Instinct over A2A, even a partner's", async () => {
+      const { tools, a2a, alex, sam } = setup();
+      const r = await run(tools, "ask_instinct", { contact: "sam", intent: "book_request", text: "Book Nopa for Maria", payload: { place: "Nopa" } }, ctx(contactPrincipal(alex)));
+      expect(r.isError).toBe(true);
+      expect(a2a.calls).toHaveLength(0);
+      expect(r.text).not.toContain("Sam");
+      const asAgent = await run(tools, "ask_instinct", { contact: "alex", intent: "ask", text: "hi" }, ctx(agentPrincipal(sam), { channel: "a2a", conversationKey: "a2a:ctx-1" }));
+      expect(asAgent.isError).toBe(true);
+      expect(a2a.calls).toHaveLength(0);
+    });
+
+    it("may ask their own Instinct, attributed to them and never as the owner", async () => {
+      const { tools, a2a, contacts, audit } = setup();
+      const jo = contacts.upsert({ name: "Jo Rivera", tier: "friend", agentHandle: "jo-instinct", phones: ["+16175550177"] });
+      const r = await run(tools, "ask_instinct", { contact: "@jo-instinct", intent: "ask", text: "What is on my calendar tonight?" }, ctx(contactPrincipal(jo)));
+      expect(r.isError).toBe(false);
+      expect(a2a.calls).toHaveLength(1);
+      const [peer, text, data] = a2a.calls[0]!.args as [string, string, Record<string, unknown>];
+      expect(peer).toBe("jo-instinct");
+      expect(text).toContain("From Jo Rivera, relayed by Maria's Instinct");
+      expect(text).toContain("What is on my calendar tonight?");
+      expect(text).not.toMatch(/^What is on/);
+      expect(data.on_behalf_of).toEqual({ handle: "maria-instinct", display: "Jo Rivera" });
+      const entry = audit.entries.find((e) => e.kind === "outbound")!;
+      expect(entry.detail).toMatchObject({ to: "jo-instinct", onBehalfOf: "Jo Rivera" });
+      expect(entry.principal).toBe("contact:jo-rivera");
+    });
+
+    it("uses the human behind an agent principal for on_behalf_of", async () => {
+      const { tools, a2a, contacts } = setup();
+      const jo = contacts.upsert({ name: "Jo Rivera", tier: "friend", agentHandle: "jo-instinct" });
+      await run(tools, "ask_instinct", { contact: "jo-rivera", intent: "ask", text: "ping" }, ctx(agentPrincipal(jo), { channel: "a2a", conversationKey: "a2a:ctx-2" }));
+      const data = a2a.calls[0]!.args[2] as Record<string, unknown>;
+      expect(data.on_behalf_of).toEqual({ handle: "maria-instinct", display: "Jo Rivera" });
+    });
   });
 });
 
@@ -288,6 +400,22 @@ describe("reply_instinct", () => {
     const { tools, sam } = setup({ a2a: false });
     const r = await run(tools, "reply_instinct", { taskId: "t1", intent: "complete", text: "ok" }, ctx(agentPrincipal(sam), { channel: "a2a" }));
     expect(r.isError).toBe(true);
+  });
+
+  it("turns an Inkbox 429 into guidance with the wait, and rethrows other errors", async () => {
+    const { tools, a2a, sam } = setup();
+    const a2aCtx = ctx(agentPrincipal(sam), { channel: "a2a", conversationKey: "a2a:ctx-1" });
+    let fail: unknown = Object.assign(new Error("Inkbox HTTP 429"), { name: "InkboxHttpError", status: 429, retryAfterSeconds: 7 });
+    (a2a as unknown as { reply: () => Promise<void> }).reply = async () => {
+      throw fail;
+    };
+    const r = await run(tools, "reply_instinct", { taskId: "t1", intent: "complete", text: "ok" }, a2aCtx);
+    expect(r.isError).toBe(true);
+    expect(r.text).toBe("Inkbox is rate limiting; try reply_instinct again in 7 s.");
+    fail = Object.assign(new Error("Inkbox HTTP 429"), { status: 429, retryAfterSeconds: null });
+    expect((await run(tools, "reply_instinct", { taskId: "t1", intent: "complete", text: "ok" }, a2aCtx)).text).toContain("a few seconds");
+    fail = Object.assign(new Error("Inkbox HTTP 500"), { status: 500 });
+    await expect(run(tools, "reply_instinct", { taskId: "t1", intent: "complete", text: "ok" }, a2aCtx)).rejects.toThrow(/500/);
   });
 });
 

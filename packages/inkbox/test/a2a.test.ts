@@ -5,7 +5,7 @@ import { fakeFetch, type Recorded } from "./fake-fetch.js";
 const BASE = "https://inkbox.test";
 
 function client(fake: ReturnType<typeof fakeFetch>) {
-  return new InkboxA2A({ apiKey: "ik_identity", handle: "@maria-instinct", baseUrl: BASE, fetchImpl: fake.fetchImpl });
+  return new InkboxA2A({ apiKey: "ik_identity", handle: "@maria-instinct", baseUrl: BASE, fetchImpl: fake.fetchImpl, sleep: async () => {} });
 }
 
 describe("InkboxA2A worker side", () => {
@@ -80,6 +80,8 @@ describe("InkboxA2A caller side", () => {
     expect((err as A2ARpcError).code).toBe(-32003);
     expect((err as A2ARpcError).data).toEqual({ rule: "contact" });
     await expect(c.send("down", "hi")).rejects.toThrow(/503/);
+    // A 503 is retried twice before it surfaces.
+    expect(fake.calls.filter((r) => r.path === "/a2a/down")).toHaveLength(3);
   });
 
   it("fetches the peer card from the public route", async () => {

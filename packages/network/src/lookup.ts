@@ -24,12 +24,21 @@ export function phoneKey(s: string): string {
 
 export type ContactLookup = { contact: Contact; error?: undefined } | { contact?: undefined; error: string };
 
+export interface LookupOptions {
+  /**
+   * Whether an ambiguous match may name the candidates. True for the owner, who may see the
+   * address book. False for anyone else: the error then says only that several match.
+   */
+  disclose?: boolean;
+}
+
 /**
  * Resolve what the owner (or the model) typed to one contact. Accepts an id, `contact:<id>`,
  * a name, an email, a phone or an agent handle. Ambiguous names fail with the candidates
- * listed so the model can ask instead of guessing.
+ * listed (when `disclose` is on) so the model can ask instead of guessing.
  */
-export function lookupContact(contacts: ContactStore, ref: string): ContactLookup {
+export function lookupContact(contacts: ContactStore, ref: string, opts: LookupOptions = {}): ContactLookup {
+  const disclose = opts.disclose ?? true;
   const r = ref.trim();
   if (!r) return { error: "No contact given." };
 
@@ -55,6 +64,7 @@ export function lookupContact(contacts: ContactStore, ref: string): ContactLooku
   const exact = hits.filter((c) => c.name.toLowerCase() === r.toLowerCase());
   if (exact.length === 1 && exact[0]) return { contact: exact[0] };
   if (hits.length > 1) {
+    if (!disclose) return { error: `Several contacts match "${r}"; ask the owner.` };
     return { error: `Several contacts match "${r}": ${hits.map((c) => `${c.name} (${c.id})`).join(", ")}. Use the id.` };
   }
   return { error: `No contact matches "${r}".` };

@@ -1,8 +1,10 @@
 /**
  * Turn an Inkbox webhook envelope into the one InboundMessage shape the runtime
- * understands. Delivery and "sent" lifecycle events return undefined: nothing to
- * say to the model. Every field is read defensively; the wire shape has moved
- * between SDK versions and will move again.
+ * understands. Delivery lifecycle events (sent, delivered, bounced, failed) return
+ * undefined: nothing to say to the model. A2A events all carry something to hear,
+ * including progress on tasks we sent and a caller cancelling one of ours. Every
+ * field is read defensively; the wire shape has moved between SDK versions and
+ * will move again.
  */
 import { normalizePhone } from "@open-instinct/core";
 import type { InboundMessage } from "@open-instinct/core";
@@ -159,6 +161,8 @@ function parseMailReceived(payload: Dict, data: Dict): InboundMessage | undefine
     from: from.toLowerCase(),
     text: `Subject: ${subject}\n\n${body}`,
     replyRef: {
+      // The sender is the reply recipient; the channel reads it when the outbound has no `to`.
+      from: from.toLowerCase(),
       // The RFC 5322 Message-ID threads replies; the Inkbox id fetches the full body.
       messageId: str(message.message_id) ?? str(message.id),
       inkboxMessageId: str(message.id),
@@ -178,12 +182,20 @@ function parseMailReceived(payload: Dict, data: Dict): InboundMessage | undefine
   };
 }
 
-function parseA2ATask(payload: Dict, data: Dict, eventType: string): InboundMessage | undefined {
-  const taskId = str(data.task_id);
-  const contextId = str(data.context_id) ?? taskId;
-  if (!taskId || !contextId) return undefined;
-  const caller = dict(data.caller) ?? dict(data.sender) ?? {};
-  const handle = str(caller.handle) ?? "";
+/** Which side of an A2A task an event describes. */
+type A2ADirection = "received" | "sent";
+
+/**
+ * The counterpart on an A2A event. On tasks we received, `caller` is the peer. On
+ * `a2a.sent_task.updated`, `caller` is our own identity and the peer rides on
+ * `sender` (the SDK shape) or, on other servers, `worker`, `callee` or `identity`.
+ */
+function a2aPeer(data: Dict, direction: A2ADirection): Dict {
+  if (direction === "received") return dict(data.caller) ?? dict(data.sender) ?? {};
+  return dict(data.sender) ?? dict(data.worker) ?? dict(data.callee) ?? dict(data.identity) ?? {};
+}
+
+function a2aParts(data: Dict): { texts: string[]; firstData?: Record<string, unknown> } {
   const texts: string[] = [];
   let firstData: Record<string, unknown> | undefined;
   for (const part of list(data.parts)) {
@@ -194,24 +206,55 @@ function parseA2ATask(payload: Dict, data: Dict, eventType: string): InboundMess
     const d = dict(p.data);
     if (d && !firstData) firstData = d;
   }
+  return firstData ? { texts, firstData } : { texts };
+}
+
+function parseA2ATask(payload: Dict, data: Dict, eventType: string, direction: A2ADirection): InboundMessage | undefined {
+  const taskId = str(data.task_id);
+  const contextId = str(data.context_id) ?? taskId;
+  if (!taskId || !contextId) return undefined;
+  const peer = a2aPeer(data, direction);
+  const handle = str(peer.handle) ?? "";
+  const state = str(data.state);
+  const { texts, firstData } = a2aParts(data);
+  // Progress on a sent task may carry only a state change; still prompt so the model can report it.
+  const text = texts.length > 0 ? texts.join("\n\n") : direction === "sent" && state ? `[${state}]` : "";
+  const messageId = str(data.message_id);
   const msg: InboundMessage = {
-    id: eventId(payload, `a2a:${taskId}:${str(data.message_id) ?? eventType}`),
+    // Successive state updates arrive without a message id; keep them apart so dedupe does not eat them.
+    id: eventId(payload, `a2a:${taskId}:${messageId ?? state ?? eventType}`),
     channel: "a2a",
     conversationKey: `a2a:${contextId}`,
     from: handle,
-    text: texts.join("\n\n"),
-    replyRef: { taskId, contextId, messageId: str(data.message_id) },
+    text,
+    replyRef: { taskId, contextId, messageId },
     receivedAt: receivedAt(payload),
     source: "webhook",
     meta: {
       eventType,
-      state: str(data.state),
-      callerIdentityId: str(caller.identity_id),
-      callerOrganizationId: str(caller.organization_id),
+      state,
+      direction,
+      callerIdentityId: str(peer.identity_id),
+      callerOrganizationId: str(peer.organization_id),
     },
   };
   if (firstData) msg.data = firstData;
   return msg;
+}
+
+/** The caller withdrew a task we were working on. A short system-style line tells the model to stop. */
+function parseA2ATaskCanceled(payload: Dict, data: Dict, eventType: string): InboundMessage | undefined {
+  const base = parseA2ATask(payload, data, eventType, "received");
+  if (!base) return undefined;
+  const taskId = base.replyRef.taskId ?? "";
+  const by = base.from ? ` by @${base.from}` : " by the caller";
+  const note = base.text ? `\n\n${base.text}` : "";
+  return {
+    ...base,
+    id: eventId(payload, `a2a:${taskId}:canceled`),
+    text: `[task ${taskId} canceled${by}]${note}`,
+    meta: { ...base.meta, state: str(data.state) ?? "canceled" },
+  };
 }
 
 /** Events that carry something the model should hear. */
@@ -222,6 +265,8 @@ export const INBOUND_EVENT_TYPES = [
   "message.received",
   "a2a.task.created",
   "a2a.task.message",
+  "a2a.task.canceled",
+  "a2a.sent_task.updated",
 ] as const;
 
 export function parseInkboxEvent(payload: unknown): InboundMessage | undefined {
@@ -241,9 +286,14 @@ export function parseInkboxEvent(payload: unknown): InboundMessage | undefined {
       return parseMailReceived(p, data);
     case "a2a.task.created":
     case "a2a.task.message":
-      return parseA2ATask(p, data, eventType);
+      return parseA2ATask(p, data, eventType, "received");
+    case "a2a.task.canceled":
+      return parseA2ATaskCanceled(p, data, eventType);
+    case "a2a.sent_task.updated":
+      // The peer's progress or answer on a task we sent with ask_instinct.
+      return parseA2ATask(p, data, eventType, "sent");
     default:
-      // sent, delivered, bounced, canceled, sent_task.updated: nothing to prompt with.
+      // sent, delivered, bounced, failed, read: nothing to prompt with.
       return undefined;
   }
 }

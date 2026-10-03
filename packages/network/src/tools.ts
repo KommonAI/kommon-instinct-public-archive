@@ -65,6 +65,54 @@ function onBehalfOf(config: InstinctConfig): OipMessage["on_behalf_of"] {
   return { handle: agentHandleOf(config), display: config.owner.name };
 }
 
+function requesterName(p: Principal): string {
+  return p.kind === "agent" ? (p.onBehalfOf?.displayName ?? p.displayName) : p.displayName;
+}
+
+/** The sending handle is still ours; the human we act for is the requester, not the owner. */
+function onBehalfOfRequester(config: InstinctConfig, p: Principal): OipMessage["on_behalf_of"] {
+  return { handle: agentHandleOf(config), display: requesterName(p) };
+}
+
+const NON_OWNER_REACH = "I can only reach your own Instinct for you. For anyone else, ask the owner; offer to pass the request along.";
+
+interface AskArgs {
+  intent: OipIntent;
+  subject?: string;
+  text: string;
+  payload?: Record<string, unknown>;
+  contextId?: string;
+}
+
+interface AskResult {
+  ref: string;
+  contactId?: string;
+  name?: string;
+  ok: boolean;
+  via?: "a2a" | OutboundMessage["channel"];
+  taskId?: string;
+  contextId?: string;
+  state?: string;
+  text: string;
+}
+
+function uniqueRefs(refs: Array<string | undefined>): string[] {
+  const out: string[] = [];
+  for (const r of refs) {
+    const t = (r ?? "").trim();
+    if (t && !out.includes(t)) out.push(t);
+  }
+  return out;
+}
+
+/** "N s" or "a few seconds" for an Inkbox 429, undefined for any other error. Duck-typed so this package needs inkbox for types only. */
+function rateLimitWait(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const e = err as { status?: unknown; retryAfterSeconds?: unknown };
+  if (e.status !== 429) return undefined;
+  return typeof e.retryAfterSeconds === "number" ? `${e.retryAfterSeconds} s` : "a few seconds";
+}
+
 function fmtGrant(g: Grant): string {
   const bits = [`${g.id}: ${g.to} -> ${g.capabilities.join(", ")}`];
   const s = g.scope;
@@ -257,51 +305,117 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
     name: "ask_instinct",
     label: "Ask another Instinct",
     description:
-      "Send a request to a contact's Instinct over A2A with a typed OIP intent. If the contact has no Instinct, the same request goes to them as a text or email. Replies arrive later as new messages.",
+      "Send a request to a contact's Instinct over A2A with a typed OIP intent. Give `contact` for one person or `contacts` for a group plan; everyone gets the same request and answers separately. When the owner asks and a contact has no Instinct, the same request goes to them as a text or email. Replies arrive later as new messages.",
     parameters: Type.Object({
-      contact: Type.String({ description: "Contact id, name, phone, email or @handle" }),
+      contact: Type.Optional(Type.String({ description: "Contact id, name, phone, email or @handle" })),
+      contacts: Type.Optional(Type.Array(Type.String(), { description: "Several contacts for a group plan; each gets the same request" })),
       intent: OipIntentSchema,
       subject: Type.Optional(Type.String({ description: "Short topic, e.g. dinner with Maria and Sam" })),
       text: Type.String({ description: "Plain-language version of the request, written as the owner's Instinct" }),
       payload: Type.Optional(PayloadSchema),
-      contextId: Type.Optional(Type.String({ description: "A2A context to continue; omit to start a new topic" })),
+      contextId: Type.Optional(Type.String({ description: "A2A context to continue; only with a single contact. Omit to start a new topic" })),
     }),
-    meta: { capabilities: ["network.ask"], group: "network", describe: (a) => `ask_instinct ${(a as { contact: string }).contact} ${(a as { intent: string }).intent}` },
+    meta: {
+      capabilities: ["network.ask"],
+      group: "network",
+      describe: (a) => {
+        const x = a as { contact?: string; contacts?: string[]; intent: string };
+        return `ask_instinct ${[x.contact, ...(x.contacts ?? [])].filter(Boolean).join(", ")} ${x.intent}`;
+      },
+    },
     async execute(args, ctx) {
-      const found = lookupContact(contacts, args.contact);
-      if (!found.contact) return refuse(found.error);
-      const c = found.contact;
-      const oip: OipMessage = { oip: "1", intent: args.intent, payload: args.payload ?? {}, on_behalf_of: onBehalfOf(config) };
-      if (args.subject) oip.subject = args.subject;
+      const refs = uniqueRefs([args.contact, ...(args.contacts ?? [])]);
+      if (refs.length === 0) return refuse("Give `contact` or `contacts`.");
+      if (args.contextId && refs.length > 1) return refuse("contextId continues one peer's topic. Give one contact with it.");
 
-      if (c.agentHandle && deps.a2a) {
-        const res = await deps.a2a.send(c.agentHandle, args.text, encodeOip(oip), args.contextId ? { contextId: args.contextId } : undefined);
-        audit.append({
-          kind: "outbound",
-          conversationKey: ctx.conversationKey,
-          principal: ctx.principal.id,
-          detail: { channel: "a2a", to: c.agentHandle, contactId: c.id, intent: args.intent, subject: args.subject, taskId: res.taskId, contextId: res.contextId, state: res.state },
-        });
-        const ids = [res.taskId ? `task ${res.taskId}` : undefined, res.contextId ? `context ${res.contextId}` : undefined].filter(Boolean).join(", ");
-        return {
-          content: [{ type: "text", text: `Sent "${args.intent}" to ${c.name}'s Instinct (@${c.agentHandle})${ids ? ` (${ids})` : ""}. Their reply will arrive here as a new message; tell the owner you will report back.` }],
-          details: { taskId: res.taskId, contextId: res.contextId, state: res.state },
-        };
+      const results: AskResult[] = [];
+      const seen = new Set<string>();
+      for (const ref of refs) {
+        const found = resolveAskTarget(ref, ctx.principal);
+        if (!found.contact) {
+          results.push({ ref, ok: false, text: `${ref}: ${found.error}` });
+          continue;
+        }
+        if (seen.has(found.contact.id)) continue;
+        seen.add(found.contact.id);
+        results.push(await askOne(found.contact, args, ctx));
       }
 
-      const route = pickFallbackChannel(c);
-      if (!route) return refuse(`${c.name} has no Instinct, phone or email on file. Ask the owner for a way to reach them.`);
-      const body = oipToText({ ...oip, payload: { ...oip.payload, text: args.text } }, config.owner.name, { tz: config.owner.timezone });
-      await outbox.send({ channel: route.channel, to: route.to, text: body }, { principal: ctx.principal, conversationKey: ctx.conversationKey });
+      const okCount = results.filter((r) => r.ok).length;
+      const anyA2a = results.some((r) => r.ok && r.via === "a2a");
+      if (results.length === 1 && results[0]) {
+        const r = results[0];
+        const details: Record<string, unknown> = { results };
+        if (r.taskId) details.taskId = r.taskId;
+        if (r.contextId) details.contextId = r.contextId;
+        if (r.state) details.state = r.state;
+        const tail = r.via === "a2a" ? " Their reply will arrive here as a new message; tell the owner you will report back." : "";
+        return { content: [{ type: "text", text: r.text + tail }], isError: !r.ok, details };
+      }
+      const lines = results.map((r) => `- ${r.text}`);
+      lines.unshift(`Asked ${okCount} of ${results.length}:`);
+      if (anyA2a) lines.push("Replies arrive here as new messages, one per Instinct; tell the owner you will report back once they answer.");
+      return { content: [{ type: "text", text: lines.join("\n") }], isError: okCount === 0, details: { results } };
+    },
+  });
+
+  /**
+   * Who a principal may address through ask_instinct. The owner: anyone in contacts. Anyone
+   * else: only their own entry (so a person can ask their own Instinct through this one), with
+   * no hint about who else is in the address book.
+   */
+  function resolveAskTarget(ref: string, principal: Principal): { contact?: Contact; error: string } {
+    if (isOwner(principal)) {
+      const found = lookupContact(contacts, ref);
+      return found.contact ? { contact: found.contact, error: "" } : { error: found.error };
+    }
+    const found = lookupContact(contacts, ref, { disclose: false });
+    const mine = principal.contactId;
+    if (!found.contact) return { error: /^Several contacts match/.test(found.error) ? found.error : NON_OWNER_REACH };
+    if (!mine || found.contact.id !== mine) return { error: NON_OWNER_REACH };
+    return { contact: found.contact, error: "" };
+  }
+
+  async function askOne(c: Contact, args: AskArgs, ctx: ToolContext): Promise<AskResult> {
+    const owner = isOwner(ctx.principal);
+    const oip: OipMessage = { oip: "1", intent: args.intent, payload: args.payload ?? {}, on_behalf_of: owner ? onBehalfOf(config) : onBehalfOfRequester(config, ctx.principal) };
+    if (args.subject) oip.subject = args.subject;
+    // A relayed request must never read as the owner's own words.
+    const text = owner ? args.text : `From ${requesterName(ctx.principal)}, relayed by ${config.owner.name}'s Instinct (not ${config.owner.name}'s request): ${args.text}`;
+    const base = { ref: c.id, contactId: c.id, name: c.name };
+
+    if (c.agentHandle && deps.a2a) {
+      const res = await deps.a2a.send(c.agentHandle, text, encodeOip(oip), args.contextId ? { contextId: args.contextId } : undefined);
       audit.append({
         kind: "outbound",
         conversationKey: ctx.conversationKey,
         principal: ctx.principal.id,
-        detail: { channel: route.channel, to: route.to, contactId: c.id, intent: args.intent, subject: args.subject, fallback: true },
+        detail: { channel: "a2a", to: c.agentHandle, contactId: c.id, intent: args.intent, subject: args.subject, taskId: res.taskId, contextId: res.contextId, state: res.state, onBehalfOf: oip.on_behalf_of?.display },
       });
-      return textResult(`${c.name} has no Instinct, so I sent them a ${route.channel === "email" ? "email" : "text"} instead:\n${body}`);
-    },
-  });
+      const ids = [res.taskId ? `task ${res.taskId}` : undefined, res.contextId ? `context ${res.contextId}` : undefined].filter(Boolean).join(", ");
+      const out: AskResult = { ...base, ok: true, via: "a2a", text: `Sent "${args.intent}" to ${c.name}'s Instinct (@${c.agentHandle})${ids ? ` (${ids})` : ""}.` };
+      if (res.taskId) out.taskId = res.taskId;
+      if (res.contextId) out.contextId = res.contextId;
+      if (res.state) out.state = res.state;
+      return out;
+    }
+
+    if (!owner) {
+      // Texting or emailing a human as the owner's Instinct is the owner's call, never a caller's.
+      return { ...base, ok: false, text: `${c.name}: only the owner can message people who have no Instinct. Offer to pass the request to the owner.` };
+    }
+    const route = pickFallbackChannel(c);
+    if (!route) return { ...base, ok: false, text: `${c.name} has no Instinct, phone or email on file. Ask the owner for a way to reach them.` };
+    const body = oipToText({ ...oip, payload: { ...oip.payload, text: args.text } }, config.owner.name, { tz: config.owner.timezone });
+    await outbox.send({ channel: route.channel, to: route.to, text: body }, { principal: ctx.principal, conversationKey: ctx.conversationKey });
+    audit.append({
+      kind: "outbound",
+      conversationKey: ctx.conversationKey,
+      principal: ctx.principal.id,
+      detail: { channel: route.channel, to: route.to, contactId: c.id, intent: args.intent, subject: args.subject, fallback: true },
+    });
+    return { ...base, ok: true, via: route.channel, text: `${c.name} has no Instinct, so I sent them a ${route.channel === "email" ? "email" : "text"} instead:\n${body}` };
+  }
 
   const replyInstinct = defineTool({
     name: "reply_instinct",
@@ -321,7 +435,13 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
       if (ctx.channel !== "a2a") return refuse("reply_instinct only works inside an A2A conversation. Use send_message here.");
       if (!deps.a2a) return refuse("A2A is not configured on this agent.");
       const data = buildReplyData(args, config);
-      await deps.a2a.reply(args.taskId, args.intent as ReplyIntent, args.text, data);
+      try {
+        await deps.a2a.reply(args.taskId, args.intent as ReplyIntent, args.text, data);
+      } catch (err) {
+        const wait = rateLimitWait(err);
+        if (wait !== undefined) return refuse(`Inkbox is rate limiting; try reply_instinct again in ${wait}.`);
+        throw err;
+      }
       audit.append({
         kind: "outbound",
         conversationKey: ctx.conversationKey,
