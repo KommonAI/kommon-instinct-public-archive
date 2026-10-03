@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.instinct/
+.instinct-*/
+*.log
+.DS_Store
+coverage/
+.pnpm-store/

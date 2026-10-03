@@ -1,0 +1,35 @@
+# LibreInstinct gateway image: the stateless relay from Inkbox webhooks to Maritime agents,
+# plus the signup and connect pages. One per deployment, many users.
+FROM node:22-slim AS base
+ENV PNPM_HOME=/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl \
+  && rm -rf /var/lib/apt/lists/* \
+  && corepack enable
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc tsconfig.base.json ./
+COPY packages/core/package.json packages/core/
+COPY packages/inkbox/package.json packages/inkbox/
+COPY packages/computer/package.json packages/computer/
+COPY packages/apps/package.json packages/apps/
+COPY packages/network/package.json packages/network/
+COPY packages/server/package.json packages/server/
+COPY packages/gateway/package.json packages/gateway/
+COPY packages/cli/package.json packages/cli/
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+COPY packages ./packages
+RUN pnpm -r --filter './packages/*' run build \
+  && (pnpm prune --prod || echo "prune skipped; keeping dev deps")
+
+FROM base AS runtime
+ENV NODE_ENV=production \
+    PORT=8787
+COPY --from=build /app /app
+EXPOSE 8787
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl -fsS "http://127.0.0.1:${PORT}/health" || exit 1
+CMD ["node", "packages/gateway/dist/main.js"]

@@ -1,0 +1,191 @@
+/**
+ * Messaging tools the model can call. The policy guard decides whether the
+ * principal may converse at all; this file enforces the one rule policy cannot
+ * express: a non-owner may only speak in their own thread or to the owner.
+ */
+import { Type } from "typebox";
+import { defineTool, normalizeHandle, normalizePhone, textResult } from "@libre-instinct/core";
+import type { Contact, ContactStore, InstinctConfig, OutboundMessage, RegisteredTool, ToolContext } from "@libre-instinct/core";
+import type { InkboxChannel } from "./channel.js";
+import { parseConversationKey } from "./channel.js";
+
+export interface MessagingDeps {
+  channel: InkboxChannel;
+  contacts: ContactStore;
+  config: InstinctConfig;
+}
+
+type SendChannel = "imessage" | "sms" | "email";
+
+export interface ResolvedTarget {
+  channel: SendChannel;
+  to: string;
+  label: string;
+}
+
+function looksLikeEmail(s: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
+function looksLikePhone(s: string): boolean {
+  return /^\+?[\d\s().-]{7,}$/.test(s) && s.replace(/\D/g, "").length >= 7;
+}
+
+function pickForContact(c: Contact, preferred?: SendChannel): ResolvedTarget {
+  const phone = c.phones[0];
+  const email = c.emails[0];
+  if (preferred === "email" || (!preferred && !phone)) {
+    if (!email) throw new Error(`${c.name} has no email on file`);
+    return { channel: "email", to: email, label: c.name };
+  }
+  if (!phone) throw new Error(`${c.name} has no phone number on file`);
+  return { channel: preferred === "sms" ? "sms" : "imessage", to: phone, label: c.name };
+}
+
+/**
+ * "owner", a contact id or name, a phone number or an email address become a
+ * concrete channel and address. iMessage is the default for phone numbers.
+ */
+export function resolveTarget(to: string, deps: Pick<MessagingDeps, "contacts" | "config">, preferred?: SendChannel): ResolvedTarget {
+  const raw = to.trim();
+  if (!raw) throw new Error("`to` is empty");
+  if (raw.toLowerCase() === "owner") {
+    const owner = deps.config.owner;
+    const phone = owner.phones[0];
+    const email = owner.emails[0];
+    if (preferred === "email" || (!preferred && !phone)) {
+      if (!email) throw new Error("the owner has no email configured");
+      return { channel: "email", to: email, label: owner.name };
+    }
+    if (!phone) throw new Error("the owner has no phone configured");
+    return { channel: preferred === "sms" ? "sms" : "imessage", to: phone, label: owner.name };
+  }
+  if (looksLikeEmail(raw)) {
+    const c = deps.contacts.findByEmail(raw);
+    return { channel: "email", to: raw.toLowerCase(), label: c?.name ?? raw };
+  }
+  if (looksLikePhone(raw)) {
+    const phone = normalizePhone(raw);
+    const c = deps.contacts.findByPhone(phone);
+    return { channel: preferred === "sms" ? "sms" : "imessage", to: phone, label: c?.name ?? phone };
+  }
+  const byId = deps.contacts.get(raw) ?? deps.contacts.get(normalizeHandle(raw).replace(/\s+/g, "-"));
+  if (byId) return pickForContact(byId, preferred);
+  const matches = deps.contacts.search(raw);
+  if (matches.length === 1 && matches[0]) return pickForContact(matches[0], preferred);
+  if (matches.length > 1) {
+    throw new Error(`"${raw}" matches several contacts: ${matches.map((m) => m.id).join(", ")}. Use the contact id.`);
+  }
+  throw new Error(`no contact, phone or email matches "${raw}"`);
+}
+
+function isOwner(ctx: ToolContext): boolean {
+  return ctx.principal.kind === "owner";
+}
+
+const sendMessageParams = Type.Object({
+  to: Type.Optional(
+    Type.String({
+      description: 'Recipient: a contact id or name, a phone number, an email address, or "owner". Omit to reply in the current conversation.',
+    }),
+  ),
+  channel: Type.Optional(
+    Type.Union([Type.Literal("imessage"), Type.Literal("sms"), Type.Literal("email")], {
+      description: "Force a channel. Default: iMessage for phones, email for addresses.",
+    }),
+  ),
+  text: Type.String({ description: "The message. Plain text; keep iMessage short." }),
+  subject: Type.Optional(Type.String({ description: "Email subject when starting a new email thread." })),
+});
+
+const reactParams = Type.Object({
+  messageId: Type.String({ description: "The iMessage id to react to (from the conversation)." }),
+  reaction: Type.String({ description: "love, like, dislike, laugh, emphasize or question." }),
+});
+
+export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
+  const sendMessage = defineTool({
+    name: "send_message",
+    label: "Send message",
+    description:
+      "Send a text message. With no `to`, replies in the current conversation. With `to`, messages a contact, a phone number, an email address, or the owner.",
+    parameters: sendMessageParams,
+    meta: {
+      capabilities: ["converse"],
+      group: "messaging",
+      describe: (args) => {
+        const a = args as { to?: string; text?: string };
+        return `send_message to ${a.to ?? "current conversation"}: ${(a.text ?? "").slice(0, 80)}`;
+      },
+    },
+    execute: async (args, ctx) => {
+      const text = args.text.trim();
+      if (!text) return { content: [{ type: "text", text: "Nothing to send: text is empty." }], isError: true };
+
+      if (!args.to) {
+        const key = parseConversationKey(ctx.conversationKey);
+        if (key.channel === "a2a") {
+          throw new Error("This is an agent-to-agent conversation. Use reply_instinct to answer the other agent.");
+        }
+        if (key.channel !== "imessage" && key.channel !== "sms" && key.channel !== "email") {
+          throw new Error(`Cannot reply on "${ctx.conversationKey}". Give \`to\` to pick a recipient.`);
+        }
+        const msg: OutboundMessage = { channel: key.channel, conversationKey: ctx.conversationKey, text };
+        await deps.channel.send(msg, { principal: ctx.principal, conversationKey: ctx.conversationKey });
+        return textResult(`Sent in the current ${key.channel} conversation.`);
+      }
+
+      const wantsOwner = args.to.trim().toLowerCase() === "owner";
+      if (!isOwner(ctx) && !wantsOwner) {
+        throw new Error(`${ctx.principal.displayName} may only reply here or leave a message for the owner (to: "owner").`);
+      }
+
+      const target = resolveTarget(args.to, deps, args.channel);
+      const msg: OutboundMessage = { channel: target.channel, to: target.to, text };
+      if (target.channel === "email") {
+        (msg as OutboundMessage & { replyRef?: Record<string, string | undefined> }).replyRef = {
+          subject: args.subject ?? (wantsOwner && !isOwner(ctx) ? `Message from ${ctx.principal.displayName}` : "Message from your Instinct"),
+        };
+      }
+      if (!isOwner(ctx) && wantsOwner) {
+        // The owner must always know who a relayed message came from.
+        msg.text = `From ${ctx.principal.displayName}: ${text}`;
+      }
+      await deps.channel.send(msg, { principal: ctx.principal, conversationKey: ctx.conversationKey });
+      return textResult(`Sent to ${target.label} via ${target.channel}.`);
+    },
+  });
+
+  const sendTyping = defineTool({
+    name: "send_typing",
+    label: "Show typing",
+    description: "Show a typing indicator in the current iMessage conversation while you work. No effect on other channels.",
+    parameters: Type.Object({}),
+    meta: { capabilities: ["converse"], group: "messaging", describe: () => "send_typing" },
+    execute: async (_args, ctx) => {
+      await deps.channel.typing(ctx.conversationKey);
+      return textResult("ok");
+    },
+  });
+
+  const react = defineTool({
+    name: "react",
+    label: "Tapback",
+    description: "Add an iMessage tapback (love, like, dislike, laugh, emphasize, question) to a message in the current conversation.",
+    parameters: reactParams,
+    meta: {
+      capabilities: ["converse"],
+      group: "messaging",
+      describe: (args) => {
+        const a = args as { reaction?: string; messageId?: string };
+        return `react ${a.reaction ?? ""} on ${a.messageId ?? ""}`;
+      },
+    },
+    execute: async (args, ctx) => {
+      await deps.channel.react(ctx.conversationKey, args.messageId, args.reaction);
+      return textResult(`Reacted ${args.reaction}.`);
+    },
+  });
+
+  return [sendMessage, sendTyping, react];
+}

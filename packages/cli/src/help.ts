@@ -1,0 +1,135 @@
+/** Grouped help text. One line per command and one example each. */
+import type { Palette } from "./ansi.js";
+
+export interface HelpEntry {
+  name: string;
+  usage: string;
+  summary: string;
+  example: string;
+  flags?: string[];
+}
+
+export interface HelpGroup {
+  title: string;
+  entries: HelpEntry[];
+}
+
+export const HELP_GROUPS: HelpGroup[] = [
+  {
+    title: "Set up",
+    entries: [
+      {
+        name: "init",
+        usage: "init --name <you> [--phone +1...] [--email ...] [--handle <handle>] [--model provider/id]",
+        summary: "Write config.json and, with INKBOX_ADMIN_API_KEY, provision the agent's iMessage identity.",
+        example: 'instinct init --name "Maria" --phone +14155550100 --email maria@example.com --handle maria-instinct',
+        flags: ["--timezone America/New_York", "--city \"San Francisco\"", "--agent-name \"Maria's Instinct\"", "--phone-number (also buy an SMS line)", "--skip-inkbox"],
+      },
+      {
+        name: "connect",
+        usage: "connect",
+        summary: "Print the router number and `connect @handle` text; save the QR to <dataDir>/connect-qr.png.",
+        example: "instinct connect",
+      },
+    ],
+  },
+  {
+    title: "Run",
+    entries: [
+      {
+        name: "dev",
+        usage: "dev [--port 8080] [--tunnel]",
+        summary: "Run the agent server in this process. --tunnel opens an Inkbox tunnel so iMessage reaches it.",
+        example: "instinct dev --port 8080 --tunnel",
+      },
+      {
+        name: "chat",
+        usage: 'chat "<message>" [--url http://127.0.0.1:8080] [--agent <maritimeAgentId>] [--conversation <id>]',
+        summary: "Send one message to a running agent, locally or through api.maritime.sh.",
+        example: 'instinct chat "what is on my calendar tomorrow"',
+      },
+      {
+        name: "status",
+        usage: "status [--url http://127.0.0.1:8080]",
+        summary: "Show what a running server reports on GET /.",
+        example: "instinct status",
+      },
+    ],
+  },
+  {
+    title: "Deploy",
+    entries: [
+      {
+        name: "deploy",
+        usage: "deploy --image ghcr.io/<you>/libre-instinct-agent:<tag> [--name instinct-<handle>] [--idle 900] [--no-desktop] [--dry-run]",
+        summary: "Create the Maritime agent (own microVM with a desktop) from a built image. Needs MARITIME_API_KEY.",
+        example: "instinct deploy --image ghcr.io/maria/libre-instinct-agent:latest",
+      },
+    ],
+  },
+  {
+    title: "People and trust",
+    entries: [
+      {
+        name: "invite",
+        usage: "invite <name> --tier <tier> [--email x@y] [--phone +1...] [--handle <peer-handle>]",
+        summary: "Add a person to the trusted network and create an Inkbox A2A invitation for their agent.",
+        example: 'instinct invite "Sam Lee" --tier partner --email sam@example.com --handle sam-instinct',
+      },
+      {
+        name: "trust",
+        usage: "trust list | set <contact> <tier> | grant <contact> <cap,cap> [--until YYYY-MM-DD] [--max-usd N] | revoke <grantId>",
+        summary: "Change tiers and scoped grants. Tiers: partner, family, friend, contact, stranger.",
+        example: 'instinct trust grant sam-lee calendar.write,plans.commit --until 2026-10-12 --max-usd 150 --note "dinner this week"',
+      },
+    ],
+  },
+  {
+    title: "Proactive",
+    entries: [
+      {
+        name: "schedules",
+        usage: 'schedules list | add "<cron>" "<prompt>" [--tz Area/City] [--name ...] | add --at <iso> "<prompt>" | remove <id>',
+        summary: "Cron or one-shot prompts the agent runs for you, delivered over iMessage.",
+        example: 'instinct schedules add "0 8 * * 1-5" "Morning briefing: calendar, weather, top emails" --tz America/New_York',
+      },
+    ],
+  },
+];
+
+export function renderHelp(c: Palette, command?: string): string {
+  const lines: string[] = [];
+  const entry = command ? HELP_GROUPS.flatMap((g) => g.entries).find((e) => e.name === command) : undefined;
+  if (entry) {
+    lines.push(c.bold(`instinct ${entry.usage}`));
+    lines.push("");
+    lines.push(`  ${entry.summary}`);
+    if (entry.flags?.length) {
+      lines.push("");
+      lines.push("  More flags:");
+      for (const f of entry.flags) lines.push(`    ${f}`);
+    }
+    lines.push("");
+    lines.push(`  ${c.dim("example")}  ${entry.example}`);
+    lines.push("");
+    lines.push(c.dim("  Every command accepts --data-dir <dir> (default $INSTINCT_DATA_DIR or ./.instinct)."));
+    return lines.join("\n");
+  }
+  lines.push(c.bold("instinct") + "  LibreInstinct: a personal agent you text on iMessage, with its own computer.");
+  lines.push("");
+  lines.push("Usage: instinct <command> [options]   (add --help to any command)");
+  lines.push("");
+  for (const group of HELP_GROUPS) {
+    lines.push(c.bold(group.title));
+    const width = Math.max(...group.entries.map((e) => e.name.length));
+    for (const e of group.entries) {
+      lines.push(`  ${c.cyan(e.name.padEnd(width))}  ${e.summary}`);
+      lines.push(`  ${" ".repeat(width)}  ${c.dim(e.example)}`);
+    }
+    lines.push("");
+  }
+  lines.push("Global: --data-dir <dir> (default $INSTINCT_DATA_DIR or ./.instinct), --help, --version");
+  lines.push("");
+  lines.push("Env: INSTINCT_DATA_DIR, INKBOX_ADMIN_API_KEY, MARITIME_API_KEY, ANTHROPIC_API_KEY, COMPOSIO_API_KEY");
+  return lines.join("\n");
+}

@@ -1,0 +1,50 @@
+# Local trial of the two images. Copy deploy/.env.example to deploy/.env and fill it in.
+#
+#   docker compose -f deploy/docker-compose.yml up --build
+#
+# The agent answers on http://localhost:8080 (POST /chat {"message": "hi"}).
+# Without Inkbox keys the agent still runs: replies go to its console outbox (docker logs).
+#
+# The gateway is behind a profile because it needs MARITIME_API_KEY and INKBOX_ADMIN_API_KEY:
+#
+#   docker compose -f deploy/docker-compose.yml --profile gateway up --build
+#
+# It answers on http://localhost:8787 and relays Inkbox webhooks to Maritime-hosted agents.
+services:
+  agent:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.agent
+    image: libre-instinct-agent:local
+    env_file:
+      - .env
+    environment:
+      PORT: "8080"
+      INSTINCT_DATA_DIR: /data
+      INSTINCT_SKILLS_DIR: /app/skills
+    ports:
+      - "8080:8080"
+    volumes:
+      - agent-data:/data
+    restart: unless-stopped
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    image: libre-instinct-gateway:local
+    env_file:
+      - .env
+    profiles: ["gateway"]
+    environment:
+      PORT: "8787"
+      GATEWAY_DATA_DIR: /data
+    ports:
+      - "8787:8787"
+    volumes:
+      - gateway-data:/data
+    restart: unless-stopped
+
+volumes:
+  agent-data:
+  gateway-data:

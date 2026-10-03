@@ -1,0 +1,175 @@
+/**
+ * `instinct dev`: run the agent server in this process. No Docker, no
+ * Maritime. Secrets from init are loaded into env first. With --tunnel the
+ * process also opens an Inkbox tunnel and subscribes the webhook, mirroring
+ * the server's own main.ts so iMessage reaches a laptop.
+ */
+import { parse, str, flag, type OptionSpec } from "../args.js";
+import type { CliContext } from "../context.js";
+import { readSecrets, applySecretsToEnv } from "../secrets.js";
+
+/**
+ * The slice of @libre-instinct/server the CLI calls. Only `boot` and
+ * `createHttpServer` are required; the webhook helpers are used when present.
+ */
+export interface ServerModule {
+  boot(env: NodeJS.ProcessEnv, opts?: { logger?: (m: string) => void }): Promise<BootLike>;
+  createHttpServer(app: BootLike, opts?: HttpOptsLike): Listenable;
+  ensureWebhookSubscription?(opts: {
+    adminApiKey: string;
+    handle: string;
+    identityId?: string;
+    url: string;
+    state: unknown;
+    knownSigningKey?: string;
+    logger?: (m: string) => void;
+  }): Promise<{ subscriptionId: string; created: boolean; signingKey?: string }>;
+  readWebhookSecrets?(state: unknown): { signingKey?: string };
+}
+
+export interface BootLike {
+  state?: unknown;
+  close?(): Promise<void>;
+  [k: string]: unknown;
+}
+
+export interface HttpOptsLike {
+  env?: NodeJS.ProcessEnv;
+  logger?: (m: string) => void;
+  signingKeyProvider?: () => string | undefined;
+}
+
+export interface Listenable {
+  listen(port: number, host: string, cb?: () => void): unknown;
+  once?(event: "error", cb: (err: Error) => void): unknown;
+  close?(cb?: () => void): unknown;
+}
+
+export interface TunnelHandle {
+  publicUrl: string;
+  close(): Promise<void>;
+}
+
+export type TunnelConnector = (opts: { apiKey: string; handle: string; forwardTo: string; log: (m: string) => void }) => Promise<TunnelHandle>;
+
+async function defaultImportServer(): Promise<ServerModule> {
+  const mod = (await import("@libre-instinct/server")) as unknown as Partial<ServerModule>;
+  if (typeof mod.boot !== "function" || typeof mod.createHttpServer !== "function") {
+    throw new Error("@libre-instinct/server does not export boot and createHttpServer");
+  }
+  return mod as ServerModule;
+}
+
+const defaultConnectTunnel: TunnelConnector = async ({ apiKey, handle, forwardTo, log }) => {
+  const { Inkbox } = await import("@inkbox/sdk");
+  const { connect } = await import("@inkbox/sdk/tunnels/connect");
+  const listener = await connect(new Inkbox({ apiKey }), {
+    name: handle,
+    forwardTo,
+    installSignalHandlers: false,
+    onStatus: (status: unknown) => log(`tunnel ${String(status)}`),
+  });
+  return { publicUrl: listener.publicUrl, close: () => listener.close() };
+};
+
+export const devOptions: OptionSpec = {
+  port: { type: "string" },
+  tunnel: { type: "boolean" },
+  host: { type: "string" },
+  quiet: { type: "boolean" },
+};
+
+export async function runDev(ctx: CliContext, argv: string[]): Promise<number> {
+  const { values } = parse("dev", argv, devOptions);
+  const port = Number(str(values, "port") ?? ctx.env.PORT ?? "8080");
+  const host = str(values, "host") ?? "0.0.0.0";
+  const { c } = ctx;
+  const log = flag(values, "quiet") ? () => {} : (m: string): void => ctx.print(c.dim(`[instinct] ${m}`));
+
+  // The server reads env; we hand it the same object after filling in what init saved.
+  const env: NodeJS.ProcessEnv = ctx.env;
+  env.INSTINCT_DATA_DIR = ctx.dataDir;
+  env.PORT = String(port);
+  if (flag(values, "tunnel")) env.INSTINCT_TUNNEL = "1";
+  const applied = applySecretsToEnv(env, readSecrets(ctx.dataDir));
+  if (applied.length > 0) log(`loaded ${applied.join(", ")} from secrets/inkbox.json`);
+
+  const server = await (ctx.io.importServer ?? defaultImportServer)();
+  const app = await server.boot(env, { logger: log });
+  const httpServer = server.createHttpServer(app, {
+    env,
+    logger: log,
+    signingKeyProvider: () => env.INKBOX_SIGNING_KEY ?? server.readWebhookSecrets?.(app.state)?.signingKey,
+  });
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once?.("error", reject);
+    httpServer.listen(port, host, () => resolve());
+  });
+
+  ctx.print(`${c.green("LibreInstinct is running")} on http://127.0.0.1:${port}  (data: ${ctx.dataDir})`);
+  ctx.print(`  chat:   instinct chat "hello" --url http://127.0.0.1:${port}`);
+  ctx.print(`  status: instinct status --url http://127.0.0.1:${port}`);
+
+  let tunnel: TunnelHandle | undefined;
+  if (env.INSTINCT_TUNNEL === "1") {
+    tunnel = await startTunnel(ctx, server, app, port, log).catch((err: Error) => {
+      ctx.warn(`tunnel not started: ${err.message}`);
+      return undefined;
+    });
+  } else {
+    ctx.print(c.dim("  no tunnel: iMessage webhooks need `--tunnel` or the gateway"));
+  }
+
+  installShutdown(ctx, log, async () => {
+    await tunnel?.close();
+    await new Promise<void>((resolve) => (httpServer.close ? httpServer.close(() => resolve()) : resolve()));
+    await app.close?.();
+  });
+  return 0;
+}
+
+async function startTunnel(ctx: CliContext, server: ServerModule, app: BootLike, port: number, log: (m: string) => void): Promise<TunnelHandle> {
+  const { env } = ctx;
+  const apiKey = env.INKBOX_API_KEY;
+  const handle = env.INKBOX_AGENT_HANDLE;
+  if (!apiKey || !handle) throw new Error("INKBOX_API_KEY and INKBOX_AGENT_HANDLE are required (run `instinct init` with INKBOX_ADMIN_API_KEY)");
+  const connectTunnel = ctx.io.connectTunnel ?? defaultConnectTunnel;
+  const tunnel = await connectTunnel({ apiKey, handle, forwardTo: `http://127.0.0.1:${port}`, log });
+  const webhookUrl = `${tunnel.publicUrl.replace(/\/+$/, "")}/webhooks/inkbox`;
+  ctx.print(`  tunnel: ${tunnel.publicUrl}`);
+
+  if (env.INKBOX_ADMIN_API_KEY && server.ensureWebhookSubscription) {
+    try {
+      const result = await server.ensureWebhookSubscription({
+        adminApiKey: env.INKBOX_ADMIN_API_KEY,
+        handle,
+        identityId: env.INKBOX_IDENTITY_ID,
+        url: webhookUrl,
+        state: app.state,
+        knownSigningKey: env.INKBOX_SIGNING_KEY,
+        logger: log,
+      });
+      ctx.print(`  webhook: subscription ${result.subscriptionId}${result.created ? " (new)" : ""}`);
+    } catch (err) {
+      ctx.warn(`webhook subscription failed: ${(err as Error).message}`);
+    }
+  } else {
+    ctx.print(ctx.c.dim(`  webhook: subscribe Inkbox events to ${webhookUrl} (set INKBOX_ADMIN_API_KEY to do this automatically)`));
+  }
+  return tunnel;
+}
+
+function installShutdown(ctx: CliContext, log: (m: string) => void, close: () => Promise<void>): void {
+  if (ctx.io.installSignalHandlers === false) return;
+  let done = false;
+  const shutdown = (signal: string): void => {
+    if (done) return;
+    done = true;
+    log(`${signal}: shutting down`);
+    const timer = setTimeout(() => process.exit(0), 10_000);
+    timer.unref();
+    close().finally(() => process.exit(0));
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+}
