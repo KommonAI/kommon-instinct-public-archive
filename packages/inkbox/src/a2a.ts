@@ -124,7 +124,7 @@ export class InkboxA2A {
     };
     const payload = await this.rest.requestUrl<Dict>("POST", `${this.rest.baseUrl}/a2a/${encodeURIComponent(peer)}`, body, {
       "A2A-Version": "1.0",
-    });
+    }, { replaySafe: true });
     const error = dict(payload?.error);
     if (error) {
       throw new A2ARpcError(typeof error.code === "number" ? error.code : -32603, str(error.message) ?? "Unknown A2A error", error.data);

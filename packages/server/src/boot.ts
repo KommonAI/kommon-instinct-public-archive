@@ -9,6 +9,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   AgentRuntime,
+  A2AStore,
   ApprovalStore,
   AuditLog,
   ContactStore,
@@ -23,8 +24,8 @@ import {
   resolveDataDir,
   resolveModel,
 } from "@open-instinct/core";
-import type { InstinctConfig, Outbox, RegisteredTool } from "@open-instinct/core";
-import { InkboxA2A, InkboxChannel, InkboxProvisioner, messagingTools } from "@open-instinct/inkbox";
+import type { InboundMessage, InstinctConfig, Outbox, RegisteredTool } from "@open-instinct/core";
+import { InkboxA2A, InkboxChannel, InkboxInboundHydrator, InkboxProvisioner, messagingTools } from "@open-instinct/inkbox";
 import { computerGuidance, detectComputer } from "@open-instinct/computer";
 import type { ComputerBackend } from "@open-instinct/computer";
 import { ComposioApps, DEFAULT_TOOLKITS, appsGuidance } from "@open-instinct/apps";
@@ -65,6 +66,8 @@ export interface BootResult {
   chatBuffer: ChatReplyBuffer;
   /** Set when LINK_CLIENT_ID, LINK_CLIENT_SECRET and STRIPE_PUBLISHABLE_KEY are present and the package is installed. */
   wallet?: LinkWalletLike;
+  /** Complete compact Inkbox events before handing them to the runtime. */
+  hydrateInbound?: (message: InboundMessage) => Promise<InboundMessage>;
 }
 
 export const DEFAULT_MARITIME_MCP_URL = "https://mcp.maritime.sh";
@@ -85,11 +88,18 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const scheduler = new Scheduler(state);
   const contacts = new ContactStore(state);
   const memory = new MemoryStore(state);
+  const a2aStore = new A2AStore(state);
 
   const model = opts.model ?? resolveModel(config.model.primary, env);
   const modelSpec = `${model.provider}/${model.id}`;
 
   const inkbox = inkboxSettings(env, config);
+  const a2a = inkbox ? new InkboxA2A({
+    apiKey: inkbox.apiKey,
+    handle: inkbox.handle,
+    ...(env.INKBOX_BASE_URL ? { baseUrl: env.INKBOX_BASE_URL } : {}),
+    ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+  }) : undefined;
   const externalUserId = inkbox?.handle ?? config.agent.handle ?? "owner";
 
   // Outbox: Inkbox when configured, else console. A caller-supplied outbox wins (tests).
@@ -108,6 +118,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       apiKey: inkbox.apiKey,
       handle: inkbox.handle,
       identityId: inkbox.identityId,
+      ...(env.INKBOX_BASE_URL ? { baseUrl: env.INKBOX_BASE_URL } : {}),
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
     });
     const wrapped = new ChatAwareOutbox(channel);
@@ -137,6 +148,11 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   );
 
   if (channel) registry.registerMany(messagingTools({ channel, contacts, config }));
+  const hydrator = channel ? new InkboxInboundHydrator({
+    channel,
+    mediaDir: state.path("workspace", "inbound"),
+    ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+  }) : undefined;
 
   registry.registerMany(fileTools(state.path("workspace"), { env }));
 
@@ -196,19 +212,13 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       config,
       audit,
       outbox,
-      ...(inkbox
-        ? {
-            a2a: new InkboxA2A({
-              apiKey: inkbox.apiKey,
-              handle: inkbox.handle,
-              ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-            }),
-          }
-        : {}),
+      a2aStore,
+      ...(a2a ? { a2a } : {}),
       ...(env.INKBOX_ADMIN_API_KEY
         ? {
             provisioner: new InkboxProvisioner({
               adminApiKey: env.INKBOX_ADMIN_API_KEY,
+              ...(env.INKBOX_BASE_URL ? { baseUrl: env.INKBOX_BASE_URL } : {}),
               ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
             }),
           }
@@ -260,6 +270,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     registry,
     model,
     outbox,
+    a2aStore,
+    ...(a2a ? { loadA2ATask: (taskId: string) => a2a.getTask(taskId) } : {}),
     skillsPrompt,
     streamFn: opts.streamFn ?? (streamSimple as StreamFn),
     getApiKey: (provider: string) => apiKeyFor(provider, env),
@@ -300,6 +312,7 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     modelSpec,
     chatBuffer,
     ...(wallet ? { wallet } : {}),
+    ...(hydrator ? { hydrateInbound: (message: InboundMessage) => hydrator.hydrate(message) } : {}),
     async close() {
       stopScheduler();
       sync?.stop();

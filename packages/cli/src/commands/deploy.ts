@@ -82,6 +82,7 @@ export function buildCreateBody(input: DeployInput): CreateAgentBody {
   pushVar(vars, "INKBOX_AGENT_HANDLE", handle, false);
   pushVar(vars, "INKBOX_IDENTITY_ID", secrets?.identityId ?? env.INKBOX_IDENTITY_ID, false);
   pushVar(vars, "INKBOX_API_KEY", secrets?.apiKey ?? env.INKBOX_API_KEY, true);
+  pushVar(vars, "INKBOX_BASE_URL", env.INKBOX_BASE_URL, false);
   pushVar(vars, "INKBOX_SIGNING_KEY", secrets?.signingKey ?? env.INKBOX_SIGNING_KEY, true);
   pushVar(vars, "ANTHROPIC_API_KEY", env.ANTHROPIC_API_KEY, true);
   if (!input.maritimeLlm) {

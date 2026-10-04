@@ -1,6 +1,8 @@
 import { Type } from "typebox";
+import { randomUUID } from "node:crypto";
 import type {
   AuditLog,
+  A2AStore,
   Contact,
   ContactStore,
   Grant,
@@ -31,6 +33,7 @@ export interface NetworkToolDeps {
   config: InstinctConfig;
   audit: AuditLog;
   a2a?: A2aLike;
+  a2aStore?: A2AStore;
   provisioner?: ProvisionerLike;
   outbox: Outbox;
   /** Called after a grant or tier override changes so the host can persist the policy (savePolicy). */
@@ -82,6 +85,7 @@ interface AskArgs {
   text: string;
   payload?: Record<string, unknown>;
   contextId?: string;
+  taskId?: string;
 }
 
 interface AskResult {
@@ -314,6 +318,7 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
       text: Type.String({ description: "Plain-language version of the request, written as the owner's Instinct" }),
       payload: Type.Optional(PayloadSchema),
       contextId: Type.Optional(Type.String({ description: "A2A context to continue; only with a single contact. Omit to start a new topic" })),
+      taskId: Type.Optional(Type.String({ description: "An existing delegated task to answer when the other agent asks for more input. Only with a single contact." })),
     }),
     meta: {
       capabilities: ["network.ask"],
@@ -324,9 +329,10 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
       },
     },
     async execute(args, ctx) {
+      if (ctx.channel === "a2a") return refuse("Nested delegation is not supported inside an inbound A2A task. Use reply_instinct with ask_caller to request more information from the calling agent.");
       const refs = uniqueRefs([args.contact, ...(args.contacts ?? [])]);
       if (refs.length === 0) return refuse("Give `contact` or `contacts`.");
-      if (args.contextId && refs.length > 1) return refuse("contextId continues one peer's topic. Give one contact with it.");
+      if ((args.contextId || args.taskId) && refs.length > 1) return refuse("contextId or taskId continues one peer's topic. Give one contact with it.");
 
       const results: AskResult[] = [];
       const seen = new Set<string>();
@@ -385,7 +391,18 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
     const base = { ref: c.id, contactId: c.id, name: c.name };
 
     if (c.agentHandle && deps.a2a) {
-      const res = await deps.a2a.send(c.agentHandle, text, encodeOip(oip), args.contextId ? { contextId: args.contextId } : undefined);
+      const prior = args.taskId ? deps.a2aStore?.delegation(args.taskId) : undefined;
+      if (args.taskId && (!prior || prior.peer !== c.agentHandle || prior.conversationKey !== ctx.conversationKey || prior.principal.id !== ctx.principal.id)) {
+        return { ...base, ok: false, text: "That task was not delegated to this contact from this conversation." };
+      }
+      const messageId = randomUUID();
+      deps.a2aStore?.begin({ messageId, peer: c.agentHandle, conversationKey: ctx.conversationKey, deliveryKey: ctx.deliveryKey ?? ctx.conversationKey, principal: ctx.principal, ...(ctx.replyRef ? { replyRef: { ...ctx.replyRef } } : {}), ...(args.taskId ? { taskId: args.taskId } : {}) });
+      const res = await deps.a2a.send(c.agentHandle, text, encodeOip(oip), {
+        messageId,
+        ...(args.contextId ? { contextId: args.contextId } : {}),
+        ...(args.taskId ? { taskId: args.taskId } : {}),
+      });
+      deps.a2aStore?.confirm(messageId, res);
       audit.append({
         kind: "outbound",
         conversationKey: ctx.conversationKey,
@@ -423,20 +440,23 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
     description:
       "Answer the A2A task you are working on. Use progress while you check with the owner, complete with the answer, ask_caller to ask them something, fail when you cannot help. Only valid inside an A2A conversation.",
     parameters: Type.Object({
-      taskId: Type.String(),
       intent: Type.Union(REPLY_INTENTS.map((i) => Type.Literal(i))),
       text: Type.String(),
       payload: Type.Optional(PayloadSchema),
       oipIntent: Type.Optional(OipIntentSchema),
       subject: Type.Optional(Type.String()),
     }),
-    meta: { capabilities: ["converse"], group: "network", describe: (a) => `reply_instinct ${(a as { taskId: string }).taskId} ${(a as { intent: string }).intent}` },
+    meta: { capabilities: ["converse"], group: "network", describe: (a) => `reply_instinct ${(a as { intent: string }).intent}` },
     async execute(args, ctx) {
       if (ctx.channel !== "a2a") return refuse("reply_instinct only works inside an A2A conversation. Use send_message here.");
       if (!deps.a2a) return refuse("A2A is not configured on this agent.");
+      const taskId = ctx.replyRef?.taskId;
+      if (!taskId || !ctx.assertA2AActive) return refuse("No active inbound A2A task is bound to this conversation.");
+      await ctx.assertA2AActive();
       const data = buildReplyData(args, config);
       try {
-        await deps.a2a.reply(args.taskId, args.intent as ReplyIntent, args.text, data);
+        await deps.a2a.reply(taskId, args.intent as ReplyIntent, args.text, data);
+        ctx.markA2AState?.(({ progress: "working", complete: "completed", ask_caller: "input_required", fail: "failed" } as const)[args.intent as ReplyIntent]);
       } catch (err) {
         const wait = rateLimitWait(err);
         if (wait !== undefined) return refuse(`Inkbox is rate limiting; try reply_instinct again in ${wait}.`);
@@ -446,9 +466,9 @@ export function networkTools(deps: NetworkToolDeps): RegisteredTool[] {
         kind: "outbound",
         conversationKey: ctx.conversationKey,
         principal: ctx.principal.id,
-        detail: { channel: "a2a", taskId: args.taskId, intent: args.intent, oipIntent: data ? (data as { intent?: unknown }).intent : undefined },
+        detail: { channel: "a2a", taskId, intent: args.intent, oipIntent: data ? (data as { intent?: unknown }).intent : undefined },
       });
-      return textResult(`Replied ${args.intent} on task ${args.taskId}.`);
+      return textResult(`Replied ${args.intent} on task ${taskId}.`);
     },
   });
 

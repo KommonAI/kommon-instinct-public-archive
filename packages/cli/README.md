@@ -57,6 +57,7 @@ the connect instructions.
 instinct init --name <you> [--phone +1...] [--email you@x.com] [--handle <handle>]
               [--model provider/model-id] [--timezone Area/City] [--city "..."]
               [--agent-name "..."] [--phone-number] [--skip-inkbox]
+              [--use-existing] [--rotate-signing-key]
               [--apps | --no-apps] [--toolkits gmail,googlecalendar]
 ```
 
@@ -70,6 +71,8 @@ instinct init --name <you> [--phone +1...] [--email you@x.com] [--handle <handle
 | `--agent-name` | display name of the agent (default from core, for example "Maria's Instinct") |
 | `--phone-number` | also buy an SMS line for the identity (off by default; iMessage works without it) |
 | `--skip-inkbox` | write config only, even when an admin key is present |
+| `--use-existing` | explicitly import an existing identity instead of creating a fresh one |
+| `--rotate-signing-key` | explicitly replace the identity's webhook signing key; update any other receivers too |
 | `--apps`, `--no-apps` | turn Composio apps (`apps.enabled`) on or off. Apps also turn on by themselves when `COMPOSIO_API_KEY` or `COMPOSIO_TOOLKITS` is in the environment |
 | `--toolkits` | comma-separated Composio toolkit slugs (default `gmail,googlecalendar,googlecontacts`); setting them turns apps on |
 
@@ -93,10 +96,13 @@ into env, sets `PORT` and `INSTINCT_DATA_DIR`, then imports `boot` and `createHt
 from `@open-instinct/server`.
 
 ```
-instinct dev [--port 8080] [--host 0.0.0.0] [--tunnel] [--quiet]
+instinct dev [--port 8080] [--host 127.0.0.1] [--tunnel] [--quiet]
 ```
 
-`--tunnel` sets `INSTINCT_TUNNEL=1`, opens an Inkbox tunnel to this process and, with
+The management listener binds to loopback by default. The public tunnel forwards to a
+separate webhook-only listener, so it does not expose chat, status or schedules.
+
+`--tunnel` sets `INSTINCT_TUNNEL=1`, opens an Inkbox tunnel to this listener and, with
 `INKBOX_ADMIN_API_KEY`, subscribes the webhook to `<publicUrl>/webhooks/inkbox`. Without an
 admin key it prints the URL for you to subscribe by hand. Ctrl-C closes the tunnel, the
 server and the agent cleanly. `--data-dir` may come before or after `dev`; the binary stays

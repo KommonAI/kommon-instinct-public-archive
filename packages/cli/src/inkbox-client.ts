@@ -6,7 +6,7 @@ import { InkboxProvisioner } from "@open-instinct/inkbox";
 import type { CliIo } from "./io.js";
 
 export interface ProvisionerLike {
-  provisionIdentity(input: { handle: string; displayName: string; description?: string; imessage?: boolean; phone?: boolean }): Promise<{
+  provisionIdentity(input: { handle: string; displayName: string; description?: string; imessage?: boolean; phone?: boolean; reuseExisting?: boolean }): Promise<{
     identityId: string;
     handle: string;
     email: string;
@@ -16,6 +16,7 @@ export interface ProvisionerLike {
   }>;
   mintIdentityKey(identityId: string, label: string): Promise<string>;
   createSigningKey(handle: string): Promise<string>;
+  ensureSigningKey(handle: string, opts?: { knownSigningKey?: string; rotate?: boolean }): Promise<string>;
   routerInfo(): Promise<{ number: string; connectCommand: string; smsLink: string; qrPngDataUrl: string }>;
   addContactRule(handle: string, peerHandle: string, direction?: "inbound" | "outbound" | "both"): Promise<void>;
   createInvitation(input: { peerHandles: string[]; recipientEmail?: string; expiresInSeconds?: number }): Promise<{

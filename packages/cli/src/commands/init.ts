@@ -23,6 +23,8 @@ export const initOptions: OptionSpec = {
   "agent-name": { type: "string" },
   "phone-number": { type: "boolean" },
   "skip-inkbox": { type: "boolean" },
+  "use-existing": { type: "boolean" },
+  "rotate-signing-key": { type: "boolean" },
   apps: { type: "boolean" },
   "no-apps": { type: "boolean" },
   toolkits: { type: "string" },
@@ -39,6 +41,8 @@ export interface InitFlags {
   agentName?: string;
   phoneNumber: boolean;
   skipInkbox: boolean;
+  useExisting?: boolean;
+  rotateSigningKey?: boolean;
   /** true: enable Composio apps; false: disable; undefined: leave as is. */
   apps?: boolean;
   /** Comma-separated Composio toolkit slugs. Setting them also enables apps. */
@@ -79,6 +83,8 @@ export function parseInitFlags(argv: string[], env: NodeJS.ProcessEnv = {}): Ini
     agentName: str(values, "agent-name"),
     phoneNumber: flag(values, "phone-number"),
     skipInkbox: flag(values, "skip-inkbox"),
+    useExisting: flag(values, "use-existing"),
+    rotateSigningKey: flag(values, "rotate-signing-key"),
     apps,
     toolkits: apps === false ? undefined : toolkits,
   };
@@ -137,7 +143,7 @@ export async function runInit(ctx: CliContext, argv: string[]): Promise<number> 
   if (!config.agent.handle) throw new CliError("--handle is required to provision an Inkbox identity.");
 
   const existing = readSecrets(ctx.dataDir);
-  if (existing && existing.handle === config.agent.handle) {
+  if (existing && existing.handle === config.agent.handle && existing.signingKey && !flags.rotateSigningKey) {
     ctx.print();
     ctx.print(`${c.green("Inkbox identity already provisioned")}: @${existing.handle} (${secretsPath(ctx.dataDir)})`);
     printEnvLines(ctx, existing);
@@ -156,6 +162,7 @@ export async function runInit(ctx: CliContext, argv: string[]): Promise<number> 
       description: `Open Instinct for ${config.owner.name}`,
       imessage: true,
       phone: flags.phoneNumber,
+      reuseExisting: flags.useExisting || existing?.handle === config.agent.handle,
     });
   } catch (err) {
     if (err instanceof InkboxPlanLimitError) throw new CliError(`Inkbox plan limit: ${(err as Error).message}`);
@@ -166,17 +173,22 @@ export async function runInit(ctx: CliContext, argv: string[]): Promise<number> 
     config = { ...config, agent: { ...config.agent, handle: identity.handle } };
     saveConfig(state, config);
   }
-  const apiKey = await provisioner.mintIdentityKey(identity.identityId, "open-instinct");
-  const signingKey = await provisioner.createSigningKey(identity.handle);
+  const savedIdentity = existing?.identityId === identity.identityId ? existing : undefined;
+  const apiKey = savedIdentity?.apiKey ?? await provisioner.mintIdentityKey(identity.identityId, "open-instinct");
   const secrets: InkboxSecrets = {
     handle: identity.handle,
     identityId: identity.identityId,
     apiKey,
-    signingKey,
+    signingKey: savedIdentity?.signingKey,
     email: identity.email,
     phone: identity.phone,
     tunnelHost: identity.tunnelHost,
   };
+  writeSecrets(ctx.dataDir, secrets);
+  secrets.signingKey = await provisioner.ensureSigningKey(identity.handle, {
+    knownSigningKey: savedIdentity?.signingKey ?? ctx.env.INKBOX_SIGNING_KEY,
+    rotate: flags.rotateSigningKey,
+  });
   const file = writeSecrets(ctx.dataDir, secrets);
   ctx.print(`${c.green("Identity ready")}: @${identity.handle}  ${identity.email}${identity.phone ? `  ${identity.phone}` : ""}  iMessage ${identity.imessageEnabled ? "on" : "off"}`);
   ctx.print(`Secrets written to ${file} (mode 0600).`);

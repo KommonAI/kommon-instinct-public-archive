@@ -16,15 +16,30 @@ to it, filled in the same way every time, so the other agent can act without gue
   for follow-ups) to our webhook. We answer with
   `POST /api/v1/identities/{handle}/a2a/tasks/{task_id}/reply` and a body
   `{ intent: "progress" | "complete" | "ask_caller" | "fail", parts: [...] }`. In code this is
-  `InkboxA2A.reply`, called by the `reply_instinct` tool. When the model answers in plain words without
+  `InkboxA2A.reply`, called by the `reply_instinct` tool. The runtime binds this tool to the current
+  task; the model supplies the intent and answer, not a task ID. When the model answers in plain words without
   calling the tool, the runtime sends its final text as `complete`, or as `progress` when an owner
   approval is still pending in that conversation.
-- Our agent as **caller**: `InkboxA2A.send(peer, text, data, { contextId? })` posts `SendMessage` and
+- Our agent as **caller**: `InkboxA2A.send(peer, text, data, { contextId?, taskId?, messageId? })` posts `SendMessage` and
   returns `{ taskId, contextId, state }`. This is what the `ask_instinct` tool does. The peer's
-  progress and answer arrive later as `a2a.sent_task.updated` webhooks, which become new messages in
-  the same conversation.
+  answer arrives later as an `a2a.sent_task.updated` webhook. A persisted delegation route returns
+  it to the original conversation, including after a restart. State-only submitted/working updates
+  do not start new model turns. To answer a peer's `ask_caller`, pass its existing `taskId` to
+  `ask_instinct` with the same contact from the original conversation. `contextId` alone creates
+  another task in the topic.
+- Nested caller delegation from an inbound worker task is not supported. When a worker needs
+  more information from the caller, it uses `reply_instinct` with `ask_caller`, keeping the same
+  task available for the caller's answer.
 - One A2A **context** per topic (a dinner, a trip). Tasks inside it are turns. Our conversation key
-  is `a2a:<context_id>`.
+  for delivery is `a2a:<context_id>`. Worker execution is isolated by task and caller-message
+  generation, so simultaneous tasks cannot overwrite each other's reply targets.
+
+Before worker execution, the runtime reads the current task and checks its state and caller
+message. Cancellation stops the active run, invalidates its pending approvals, and prevents
+further task tools or replies. Requests already accepted by another service cannot be undone.
+Forwarding retries retain the event ID so remote intake can deduplicate them. Once a local turn
+has started, an interrupted or uncertain execution requires recovery and is not automatically
+replayed, since it may already have caused an external action.
 
 ## Admission
 
@@ -91,8 +106,8 @@ blocks only; from a `stranger` it is declined. Proposals carry at most three opt
 A plan with several people is several two-party conversations, not one group call. `ask_instinct`
 with `contacts: ["Sam", "Priya"]` sends the same intent and payload to each person:
 
-- Each Instinct gets its own task in its own context. Its answer arrives as a separate
-  `a2a:<context_id>` conversation on the caller's side. The caller's model combines the answers
+- Each Instinct gets its own task in its own context. Its answer returns to the originating
+  conversation on the caller's side. The caller's model combines the answers
   for its owner ("Sam can do Thu, Priya can do Thu or Fri; Thu it is?").
 - A person without an Instinct gets the same request as a text or email, rendered by `oipToText`.
   Only the owner may use that fallback.

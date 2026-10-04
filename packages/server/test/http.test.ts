@@ -1,7 +1,10 @@
 import { createHmac } from "node:crypto";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { encodeEvent } from "@open-instinct/core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { encodeEvent, StateDir } from "@open-instinct/core";
 import type { HandleResult, InboundMessage, InstinctConfig, OutboundMessage, ScheduleEntry } from "@open-instinct/core";
 import { ACK_TEXT, CHAT_TOKEN_HEADER, LINK_CALLBACK_EVENT, createHttpServer, listenTunnelServer, matchScheduleEntry, type HttpApp } from "../src/http.js";
 import { ChatReplyBuffer } from "../src/console-outbox.js";
@@ -27,6 +30,7 @@ interface Stub extends HttpApp {
 function stubApp(): Stub {
   const buffer = new ChatReplyBuffer();
   const stub: Stub = {
+    state: new StateDir(mkdtempSync(join(tmpdir(), "server-inbox-"))),
     inbound: [],
     scheduled: [],
     ran: new Map(),
@@ -146,7 +150,7 @@ describe("http server", () => {
     const json = (await res.json()) as Record<string, any>;
     expect(json.response).toBe("");
     expect(json.conversationKey).toBe("imessage:conv_1");
-    expect(app.inbound[0]).toMatchObject({ channel: "imessage", conversationKey: "imessage:conv_1", text: "hello there" });
+    await vi.waitFor(() => expect(app.inbound[0]).toMatchObject({ channel: "imessage", conversationKey: "imessage:conv_1", text: "hello there" }));
     expect(typeof app.inbound[0]!.source).toBe("string");
     expect(app.inbound[0]!.meta).toMatchObject({ relaySource: "front_door" });
   });
@@ -241,6 +245,7 @@ describe("http server", () => {
       "X-Inkbox-Signature": sign(body, "r1", ts),
     });
     expect(res.status).toBe(204);
+    expect(JSON.parse(readFileSync(app.state!.path("inkbox-inbox.json"), "utf8")).receipts[0].payload.id).toBe("evt_1");
     await new Promise((r) => setTimeout(r, 10));
     expect(app.inbound).toHaveLength(1);
     expect(app.inbound[0]!.conversationKey).toBe("imessage:conv_1");
@@ -388,7 +393,7 @@ describe("http server with a chat token", () => {
     expect(await a.json()).toMatchObject({ response: "echo:hi" });
     const b = await post("/chat", { message: encodeEvent(imessageEvent), source: "front_door" }, { [CHAT_TOKEN_HEADER]: TOKEN });
     expect(b.status).toBe(200);
-    expect(app.inbound.map((m) => m.conversationKey)).toEqual(["chat:default", "imessage:conv_1"]);
+    await vi.waitFor(() => expect(app.inbound.map((m) => m.conversationKey)).toEqual(["chat:default", "imessage:conv_1"]));
   });
 
   it("the chatToken option wins over env", async () => {
