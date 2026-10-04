@@ -23,6 +23,18 @@ You text it on iMessage. It books the table, moves the meeting, checks you into 
 
 <p align="center"><img src="docs/assets/brand/hero.png" alt="A phone, an open ring, a laptop" width="760"></p>
 
+## What it looks like
+
+<p align="center"><img src="docs/assets/screenshots/imessage-mock.png" alt="Three iMessage threads: a dinner coordinated between two agents, a flight check-in with a human takeover, and a stranger being declined" width="1000"></p>
+
+<sub>Mock conversations rendered from <a href="docs/assets/mock/imessage.html">docs/assets/mock/imessage.html</a>; the wording is what the agent's skills tell it to say.</sub>
+
+| The signup page (gateway) | The connect page |
+|---|---|
+| <img src="docs/assets/screenshots/gateway-landing.png" alt="Gateway signup page" width="480"> | <img src="docs/assets/screenshots/gateway-connect.png" alt="Connect page with the router number and the connect command" width="480"> |
+
+<p align="center"><img src="docs/assets/screenshots/cli-help.png" alt="instinct --help" width="860"></p>
+
 ## Why this exists
 
 Instinct showed that a personal agent should be a phone number, not an app, and that agents coordinating with other people's agents is the interesting part. It is closed, invite-only and holds your data. Open Instinct keeps the product shape and opens the box: the model is yours to pick, the permission table is a JSON file with tests, the memory is Markdown you can read, and every side effect is in an audit log you can ask about in chat.
@@ -47,7 +59,8 @@ Three ways to run it. All need Node 22.19 or newer and pnpm 10. You bring your o
 ```bash
 git clone https://github.com/mariagorskikh/open-instinct && cd open-instinct
 nvm use                       # Node 22.20 from .nvmrc
-corepack enable && pnpm install && pnpm build
+corepack enable               # if this needs permissions, run: npm install -g pnpm@10
+pnpm install && pnpm build    # a warning about a missing bin before the first build is harmless
 export ANTHROPIC_API_KEY=sk-ant-...
 pnpm instinct init --name "Maria" --phone +14155550100 --email maria@example.com --handle maria-instinct
 pnpm instinct dev

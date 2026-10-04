@@ -24,7 +24,7 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .wrap{max-width:640px;margin:0 auto;padding:40px 16px 64px}
 header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:28px}
 .brand{font-weight:700;letter-spacing:-.01em;font-size:18px;color:var(--text)}
-.brand span{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent);margin-right:8px;vertical-align:1px}
+.brand svg{width:22px;height:22px;margin-right:9px;vertical-align:-5px}
 nav a{color:var(--muted);font-size:14px;margin-left:16px}
 h1{font-size:clamp(28px,6vw,40px);line-height:1.1;letter-spacing:-.02em;margin:0 0 12px}
 h2{font-size:20px;letter-spacing:-.01em;margin:32px 0 12px}
@@ -73,7 +73,7 @@ ${refresh}
 <body>
 <div class="wrap">
 <header>
-  <a class="brand" href="/"><span></span>Open Instinct</a>
+  <a class="brand" href="/"><svg viewBox="0 0 100 100" aria-hidden="true"><path d="M78 30 A34 34 0 1 1 62 22" fill="none" stroke="currentColor" stroke-width="10" stroke-linecap="round"/><circle cx="71" cy="25" r="6" fill="#0F766E"/></svg>Open Instinct</a>
   <nav><a href="${GITHUB_URL}" rel="noopener">GitHub</a></nav>
 </header>
 ${body}
