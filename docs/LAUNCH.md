@@ -64,9 +64,23 @@ github.com/mariagorskikh/open-instinct
 
 ## Show HN
 
-Title: Show HN: Open Instinct, an open-source personal agent you text on iMessage
+Title: Show HN: Open Instinct, an open-source personal agent you text
 
-Text: Instinct raised $1B for a closed, invite-only personal agent you text. This is the open version: Pi agent loop, Inkbox for iMessage and identity, Maritime for a microVM with a desktop per person, Composio for apps, Stripe Link for payments. The piece I care most about is the trust model: six tiers, enforced before every tool call, with a one-line text to the owner whenever another person's agent asks for something outside its tier. Nine packages, 725 tests, MIT. Happy to answer questions about the agent-to-agent protocol and what Instinct does that we do not yet.
+Text:
+
+Hi HN, Maria here. Instinct raised a billion dollars this week for a personal agent you text. It is a lovely product. It is also closed, invite-only, and it keeps your data. Grok Bot, Meta's Muse and Dots are heading the same way: one company, one agent, your whole life inside it.
+
+I think the better future is many agents, run by the people who use them and built by a community that can read every line. So we built the open-source version and we are putting it out today.
+
+What it is: a personal agent you reach on iMessage, SMS or email. It has its own computer (a Linux desktop in a microVM), it remembers, it schedules itself, and it coordinates with the agents of the people you trust. Your partner's agent can read your calendar. A friend's can only ask when you are free. A stranger gets a polite no, and you get a text saying who asked. The trust table is a file with tests, not a promise.
+
+How it is built: Pi for the agent loop (the framework OpenClaw grew out of), Inkbox for the iMessage line and the agent's identity, Maritime for hosting and the desktop, Composio for Gmail and Calendar, Stripe Link for one-time cards you approve. Every service sits behind one small package, so you can swap any of them for Twilio, Telegram, your own VM, your own MCP servers. Any model in Pi's catalog.
+
+Honest caveats: the live iMessage path and the Maritime deploy are beta, tested by hand rather than by CI. Rides, food and reservations go through the agent's own browser with a human takeover for logins and payment. Payments need a Stripe Link OAuth client, which Stripe grants by application.
+
+It is MIT. Fork it, point it at your own services, add a channel, add a tier, add voice. Let me know what you think, tell me what is wrong, and let's build on top of it together. A personal agent should be something everyone can own.
+
+https://github.com/mariagorskikh/open-instinct
 
 ## Honest caveats to keep handy
 
