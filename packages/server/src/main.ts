@@ -13,7 +13,7 @@ import type http from "node:http";
 import { Inkbox } from "@inkbox/sdk";
 import { bindHostFor } from "./bind.js";
 import { boot } from "./boot.js";
-import { createHttpServer, listenTunnelServer } from "./http.js";
+import { closeInkboxInbox, createHttpServer, listenTunnelServer } from "./http.js";
 import { ensureWebhookSubscription, readWebhookSecrets } from "./webhook-setup.js";
 
 const env = process.env;
@@ -62,6 +62,7 @@ async function main(): Promise<void> {
       .then(() => closeTunnel?.())
       .then(() => new Promise<void>((resolve) => (tunnelServer ? tunnelServer.close(() => resolve()) : resolve())))
       .then(() => new Promise<void>((resolve) => server.close(() => resolve())))
+      .then(() => closeInkboxInbox(app))
       .then(() => app.close())
       .finally(() => process.exit(0));
   };
@@ -73,7 +74,7 @@ async function startTunnel(port: number, state: Awaited<ReturnType<typeof boot>>
   const handle = env.INKBOX_AGENT_HANDLE ?? "";
   if (!handle) throw new Error("INKBOX_AGENT_HANDLE is required for the tunnel");
   const { connect } = await import("@inkbox/sdk/tunnels/connect");
-  const inkbox = new Inkbox({ apiKey: env.INKBOX_API_KEY });
+  const inkbox = new Inkbox({ apiKey: env.INKBOX_API_KEY, ...(env.INKBOX_BASE_URL ? { baseUrl: env.INKBOX_BASE_URL } : {}) });
   const listener = await connect(inkbox, {
     name: handle,
     forwardTo: `http://127.0.0.1:${port}`,
@@ -86,6 +87,7 @@ async function startTunnel(port: number, state: Awaited<ReturnType<typeof boot>>
     try {
       const result = await ensureWebhookSubscription({
         adminApiKey: env.INKBOX_ADMIN_API_KEY,
+        baseUrl: env.INKBOX_BASE_URL,
         handle,
         identityId: env.INKBOX_IDENTITY_ID,
         url: `${listener.publicUrl}/webhooks/inkbox`,

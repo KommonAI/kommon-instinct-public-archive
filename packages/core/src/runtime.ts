@@ -23,6 +23,7 @@ import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, type PolicyEngine } from "./pol
 import { normalizePhone, resolvePrincipal } from "./principal.js";
 import { readAgentsInstructions, readPersona } from "./persona.js";
 import { buildSystemPrompt, wrapUntrusted } from "./prompt.js";
+import { A2AStore, a2aState, a2aTerminal } from "./a2a-state.js";
 import type { Scheduler } from "./scheduler.js";
 import type { StateDir } from "./state.js";
 import type { RegisteredTool, ToolContext, ToolRegistry } from "./tools.js";
@@ -68,6 +69,8 @@ export interface RuntimeDeps {
   describeData?: (data: Record<string, unknown>) => string | undefined;
   /** Extra system prompt sections per principal and channel, for example the network guidance. */
   promptExtra?: (principal: Principal, channel: Channel) => string[];
+  a2aStore?: A2AStore;
+  loadA2ATask?: (taskId: string) => Promise<unknown>;
 }
 
 export interface HandleResult {
@@ -97,6 +100,17 @@ const DELIVERABLE: ReadonlySet<Channel> = new Set(["imessage", "sms", "email", "
 const APPROVAL_CHANNELS: ReadonlySet<Channel> = new Set(["imessage", "sms", "chat"]);
 const CHANNELS: ReadonlySet<string> = new Set(["imessage", "sms", "email", "a2a", "chat", "scheduled", "system"]);
 const REPLY_TOOL = "reply_instinct";
+const PROCESSING_FILE = "processing-events.json";
+
+/** Work may already have caused an external effect; automatic replay is not safe. */
+export class InboundUncertainError extends Error {
+  constructor(readonly eventId: string, cause?: unknown) {
+    super(`Inbound event ${eventId} requires recovery before replay`, { cause });
+    this.name = "InboundUncertainError";
+  }
+}
+
+class A2AInactiveError extends Error {}
 
 type OutboundChannel = OutboundMessage["channel"];
 type ReplyRef = Record<string, string | undefined>;
@@ -223,6 +237,11 @@ export class AgentRuntime {
   private readonly now: () => Date;
   private readonly sessionsDir: string;
   private readonly notifier: OwnerNotifier;
+  private readonly a2aStore: A2AStore;
+  private readonly inboundRuns = new Map<string, Promise<HandleResult>>();
+  private readonly inboundQueues = new Map<string, Promise<unknown>>();
+  private readonly a2aAdmissions = new Map<string, Promise<unknown>>();
+  private readonly backgroundReplies = new Set<string>();
   private ownerLast?: { conversationKey: string; channel: Channel };
 
   constructor(deps: RuntimeDeps) {
@@ -230,6 +249,11 @@ export class AgentRuntime {
     this.now = deps.now ?? (() => new Date());
     this.sessionsDir = deps.sessionsDir ?? deps.state.path("sessions");
     deps.state.ensure();
+    this.a2aStore = deps.a2aStore ?? new A2AStore(deps.state);
+    const savedRoute = deps.state.readJson<{ conversationKey?: unknown; channel?: unknown }>("owner-route.json", {});
+    if (typeof savedRoute.conversationKey === "string" && ["imessage", "sms"].includes(String(savedRoute.channel))) {
+      this.ownerLast = { conversationKey: savedRoute.conversationKey, channel: savedRoute.channel as Channel };
+    }
     this.notifier = new OwnerNotifier({
       state: deps.state,
       audit: deps.audit,
@@ -329,15 +353,82 @@ export class AgentRuntime {
     return conv;
   }
 
-  async handleInbound(msg: InboundMessage): Promise<HandleResult> {
-    const startedAt = Date.now();
+  async handleInbound(msg: InboundMessage, opts: { waitForCompletion?: boolean } = {}): Promise<HandleResult> {
+    const originalPrincipal = resolvePrincipal(msg, this.deps.config, this.deps.contacts);
+    const base = { principal: originalPrincipal, conversationKey: msg.conversationKey, acked: true as const };
+    if (this.seenBefore(msg.id)) return { ...base, blocked: "duplicate" };
+    if (msg.channel === "a2a" && msg.meta?.eventType === "a2a.task.canceled") {
+      this.cancelA2A(msg);
+      this.markSeen(msg.id);
+      return { ...base, blocked: "canceled" };
+    }
+    let run = this.inboundRuns.get(msg.id);
+    if (!run) {
+      run = this.processInbound(msg);
+      this.inboundRuns.set(msg.id, run);
+      void run.finally(() => this.inboundRuns.delete(msg.id)).catch(() => undefined);
+    }
+    if (opts.waitForCompletion) return run;
+    const outcome = await withinBudget(run.then((result) => ({ result }), (error: unknown) => ({ error })), this.deps.replyBudgetMs ?? DEFAULT_REPLY_BUDGET_MS);
+    if (outcome.state !== "done") {
+      this.backgroundReplies.add(msg.id);
+      return { ...base, reply: ackText(msg.channel) };
+    }
+    if ("error" in outcome.value) throw outcome.value.error;
+    return outcome.value.result;
+  }
+
+  private async processInbound(original: InboundMessage): Promise<HandleResult> {
+    if (original.meta?.conversationScopeKnown === false) throw new Error("Conversation scope must be resolved before delivery");
+    const processing = this.deps.state.readJson<string[]>(PROCESSING_FILE, []);
+    if (processing.includes(original.id)) throw new InboundUncertainError(original.id);
+    const prepared = await this.prepareA2A(original);
+    if (!prepared) {
+      this.markSeen(original.id);
+      return { acked: true, principal: resolvePrincipal(original, this.deps.config, this.deps.contacts), conversationKey: original.conversationKey, blocked: "inactive-task" };
+    }
+    const { msg, principal, key } = prepared;
+    const queueKey = key ?? runtimeKey(msg, principal ?? resolvePrincipal(msg, this.deps.config, this.deps.contacts));
+    const before = this.inboundQueues.get(queueKey) ?? Promise.resolve();
+    const work = before.catch(() => undefined).then(async () => {
+      if (this.seenBefore(original.id)) return { acked: true as const, principal: principal ?? resolvePrincipal(msg, this.deps.config, this.deps.contacts), conversationKey: msg.conversationKey, blocked: "duplicate" };
+      const active = this.deps.state.readJson<string[]>(PROCESSING_FILE, []);
+      this.deps.state.writeJson(PROCESSING_FILE, [...active, original.id]);
+      try {
+        const result = await this.runInbound(msg, principal, key);
+        if (this.backgroundReplies.delete(original.id) && !DELIVERABLE.has(msg.channel) && result.reply) this.stash(queueKey, result.reply);
+        this.markSeen(original.id);
+        this.deps.state.writeJson(PROCESSING_FILE, this.deps.state.readJson<string[]>(PROCESSING_FILE, []).filter((id) => id !== original.id));
+        return result;
+      } catch (error) {
+        throw new InboundUncertainError(original.id, error);
+      }
+    });
+    this.inboundQueues.set(queueKey, work);
+    void work.finally(() => { if (this.inboundQueues.get(queueKey) === work) this.inboundQueues.delete(queueKey); }).catch(() => undefined);
+    return work;
+  }
+
+  private async runInbound(msg: InboundMessage, routedPrincipal?: Principal, routedKey?: string): Promise<HandleResult> {
     const { audit, approvals, config, contacts, policy } = this.deps;
     const group = isGroup(msg);
-    let principal = resolvePrincipal(msg, config, contacts);
-    if (group && principal.kind === "owner") principal = this.capForGroup(principal, msg);
+    let principal = routedPrincipal ?? resolvePrincipal(msg, config, contacts);
+    if (msg.meta?.delegatedResult) {
+      // Recheck after the session queue wait: preceding turns may have tightened its audience.
+      principal = { ...principal };
+      if (principal.contactId) {
+        const currentTier = contacts.get(principal.contactId)?.tier ?? "stranger";
+        if (TIER_ORDER.indexOf(currentTier) > TIER_ORDER.indexOf(principal.tier)) principal.tier = currentTier;
+      }
+      const key = routedKey ?? runtimeKey(msg, principal);
+      const latestPrincipal = this.conversations.get(key)?.principal ?? this.recallRecord(key)?.principal;
+      if (latestPrincipal?.id === principal.id && latestPrincipal.cappedFrom && TIER_ORDER.indexOf(latestPrincipal.tier) > TIER_ORDER.indexOf(principal.tier)) {
+        principal.tier = latestPrincipal.tier;
+        principal.cappedFrom ??= latestPrincipal.cappedFrom;
+      }
+    }
+    if (group) principal = this.capForGroup(principal, msg);
     const base = { principal, conversationKey: msg.conversationKey };
-
-    if (this.seenBefore(msg.id)) return { ...base, acked: true, blocked: "duplicate" };
 
     audit.append({
       kind: "inbound",
@@ -356,8 +447,11 @@ export class AgentRuntime {
 
     let text = msg.text;
     let approvalNote: string | undefined;
-    if (principal.kind === "owner" && !group) {
-      if (DELIVERABLE.has(msg.channel) && msg.channel !== "a2a") this.ownerLast = { conversationKey: msg.conversationKey, channel: msg.channel };
+    if (principal.kind === "owner" && !group && !msg.meta?.delegatedResult) {
+      if (DELIVERABLE.has(msg.channel) && msg.channel !== "a2a") {
+        this.ownerLast = { conversationKey: msg.conversationKey, channel: msg.channel };
+        this.deps.state.writeJson("owner-route.json", this.ownerLast);
+      }
       // Only a carrier-bound or local channel can settle an approval; an email From is not proof.
       const match = APPROVAL_CHANNELS.has(msg.channel) ? approvals.matchReply(msg.text) : undefined;
       if (match) {
@@ -370,8 +464,9 @@ export class AgentRuntime {
     // Everything the sender controls (text, attachment names, data parts) sits inside the
     // untrusted boundary when the sender is not the owner.
     const body = withData(withAttachments(text, msg), msg, this.deps.describeData);
-    const prompt = principal.kind === "owner" ? body : wrapUntrusted(body, untrustedLabel(msg, principal));
-    const conv = this.conversation(runtimeKey(msg, principal), principal, { deliveryKey: msg.conversationKey, replyRef: msg.replyRef });
+    const prompt = principal.kind === "owner" && !msg.meta?.delegatedResult ? body : wrapUntrusted(body, untrustedLabel(msg, principal));
+    const conv = this.conversation(routedKey ?? runtimeKey(msg, principal), principal, { deliveryKey: msg.conversationKey, replyRef: msg.replyRef });
+    if (conv.channel === "a2a" && !this.a2aStore.active(conv.replyRef.taskId ?? "", conv.replyRef.messageId)) return { ...base, acked: true, blocked: "inactive-task" };
     const stashed = this.takeStash(conv.key);
     const joinReply = (reply: string | undefined) => [approvalNote, ...stashed, reply].filter((t): t is string => Boolean(t)).join("\n\n") || undefined;
 
@@ -385,29 +480,16 @@ export class AgentRuntime {
       void withinBudget(this.deps.outbox.typing(msg.conversationKey).catch(() => undefined), TYPING_TIMEOUT_MS);
     }
 
-    const budget = this.deps.replyBudgetMs ?? DEFAULT_REPLY_BUDGET_MS;
     const promptedBefore = approvals.promptedToken();
     const run = conv.run(prompt).then(
       (reply) => ({ ok: true as const, reply }),
       (error: unknown) => ({ ok: false as const, error }),
     );
-    const outcome = await withinBudget(run, Math.max(0, budget - (Date.now() - startedAt)));
-
-    if (outcome.state === "done") {
-      const reply = this.replyText(outcome.value, principal);
-      if (!outcome.value.ok) this.auditError(conv.key, principal, outcome.value.error);
-      if (DELIVERABLE.has(msg.channel) && reply) await this.deliver(conv, reply, { keepPrompt: approvals.promptedToken() !== promptedBefore });
-      return { ...base, acked: true, reply: joinReply(reply) };
-    }
-
-    // Too slow for the HTTP budget: acknowledge now and deliver the final text when it lands.
-    // Channels without an outbox (dashboard chat) get the text on their next turn instead.
-    void run.then(async (value) => {
-      if (!value.ok) this.auditError(conv.key, principal, value.error);
-      const reply = this.replyText(value, principal);
-      if (reply) await this.deliver(conv, reply, { keepPrompt: approvals.promptedToken() !== promptedBefore });
-    });
-    return { ...base, acked: true, reply: joinReply(ackText(msg.channel)) };
+    const outcome = await run;
+    const reply = this.replyText(outcome, principal);
+    if (!outcome.ok) this.auditError(conv.key, principal, outcome.error);
+    if (DELIVERABLE.has(msg.channel) && reply) await this.deliver(conv, reply, { keepPrompt: approvals.promptedToken() !== promptedBefore });
+    return { ...base, acked: true, reply: joinReply(reply) };
   }
 
   /** Scheduled jobs run as the owner in their own conversation; results go to the owner's phone. */
@@ -431,7 +513,110 @@ export class AgentRuntime {
   // Policy guard and audit
   // -------------------------------------------------------------------------
 
+  private async prepareA2A(msg: InboundMessage): Promise<{ msg: InboundMessage; principal?: Principal; key?: string } | undefined> {
+    const taskId = msg.channel === "a2a" ? msg.replyRef.taskId : undefined;
+    if (!taskId) return this.readA2AAdmission(msg);
+    const previous = this.a2aAdmissions.get(taskId) ?? Promise.resolve();
+    // Read and record together: an older delayed snapshot must not replace a newer generation.
+    const admission = previous.catch(() => undefined).then(() => this.readA2AAdmission(msg));
+    this.a2aAdmissions.set(taskId, admission);
+    void admission.finally(() => {
+      if (this.a2aAdmissions.get(taskId) === admission) this.a2aAdmissions.delete(taskId);
+    }).catch(() => undefined);
+    return admission;
+  }
+
+  private async readA2AAdmission(msg: InboundMessage): Promise<{ msg: InboundMessage; principal?: Principal; key?: string } | undefined> {
+    if (msg.channel !== "a2a") return { msg };
+    const taskId = msg.replyRef.taskId;
+    if (!taskId) return undefined;
+    if (msg.meta?.direction === "sent" || msg.meta?.eventType === "a2a.sent_task.updated") {
+      const state = a2aState(msg.meta?.state);
+      if (state === "submitted" || state === "working") return undefined;
+      let route = this.a2aStore.delegation(taskId);
+      if (!route && this.a2aStore.hasPending() && this.deps.loadA2ATask) {
+        const task = asRecord(await this.deps.loadA2ATask(taskId));
+        if (String(task.id ?? "") !== taskId) throw new Error("A2A task response does not match the update");
+        const messages = Array.isArray(task.messages) ? task.messages.map(asRecord) : [];
+        for (const message of messages) {
+          const pending = this.a2aStore.byMessage(String(message.message_id ?? message.messageId ?? ""));
+          if (!pending || String(asRecord(task.target).handle ?? "") !== pending.peer) continue;
+          this.a2aStore.confirm(pending.messageId, { taskId, contextId: String(task.context_id ?? task.contextId ?? "") });
+          route = this.a2aStore.delegation(taskId);
+          break;
+        }
+      }
+      if (!route) {
+        if (this.a2aStore.hasPending()) throw new Error("A2A delegation is still being recorded; retry delivery");
+        return undefined;
+      }
+      const principal = { ...route.principal };
+      return {
+        msg: { ...msg, channel: channelOf(route.conversationKey), conversationKey: route.deliveryKey, replyRef: route.replyRef ?? {}, text: `Delegated task ${taskId} with @${route.peer} is ${state || "updated"}.\n${msg.text}`, meta: { ...msg.meta, delegatedResult: true } },
+        principal,
+        key: route.conversationKey,
+      };
+    }
+    let admitted = msg;
+    let state = a2aState(msg.meta?.state) || "working";
+    if (this.deps.loadA2ATask) {
+      const task = asRecord(await this.deps.loadA2ATask(taskId));
+      if (String(task.id ?? "") !== taskId || String(task.context_id ?? task.contextId ?? "") !== msg.replyRef.contextId) throw new Error("A2A task response does not match the event");
+      state = a2aState(task.state ?? asRecord(task.status).state);
+      if (a2aTerminal(state) || !["submitted", "working"].includes(state)) return undefined;
+      const history = Array.isArray(task.messages) ? task.messages.map(asRecord) : [];
+      const latest = history.filter((m) => String(m.role).toLowerCase() === "caller").at(-1);
+      if (!latest || String(latest.message_id ?? latest.messageId ?? "") !== msg.replyRef.messageId) return undefined;
+      const caller = asRecord(task.caller);
+      if (typeof caller.handle !== "string" || !caller.handle) throw new Error("A2A task has no authenticated caller");
+      const parts = Array.isArray(latest.parts) ? latest.parts.map(asRecord) : [];
+      const text = parts.flatMap((p) => typeof p.text === "string" ? [p.text] : []).join("\n\n");
+      const data = parts.find((p) => p.data && typeof p.data === "object")?.data as Record<string, unknown> | undefined;
+      const prior = history.slice(0, -1).map((m) => `${String(m.role)}: ${JSON.stringify(m.parts ?? [])}`).join("\n");
+      admitted = { ...msg, from: caller.handle, text: prior ? `Earlier messages in this task:\n${clip(prior, 24_000)}\n\nCurrent request:\n${text}` : text, ...(data ? { data } : {}) };
+    }
+    if (!this.a2aStore.active(taskId)) return undefined;
+    const key = runtimeKey(admitted, resolvePrincipal(admitted, this.deps.config, this.deps.contacts));
+    this.a2aStore.recordTask({ taskId, contextId: msg.replyRef.contextId, messageId: msg.replyRef.messageId, state, conversationKey: key });
+    return { msg: admitted };
+  }
+
+  private cancelA2A(msg: InboundMessage): void {
+    const taskId = msg.replyRef.taskId;
+    if (!taskId) return;
+    this.a2aStore.recordTask({ taskId, state: "canceled" });
+    for (const conv of this.conversations.values()) {
+      if (conv.channel === "a2a" && conv.replyRef.taskId === taskId) conv.agent.abort();
+    }
+    for (const approval of this.deps.approvals.pending()) {
+      if (this.recallRecord(approval.conversationKey)?.replyRef?.taskId === taskId) this.deps.approvals.resolve(approval.token, false);
+    }
+    const approved = this.deps.state.readJson<ApprovedRecord[]>(APPROVED_FILE, []);
+    this.deps.state.writeJson(APPROVED_FILE, approved.filter((a) => this.recallRecord(a.conversationKey)?.replyRef?.taskId !== taskId));
+  }
+
+  private async assertA2AActive(conv: Conversation): Promise<void> {
+    const { taskId, messageId } = conv.replyRef;
+    if (!taskId || !this.a2aStore.active(taskId, messageId) || a2aState(this.a2aStore.task(taskId)?.state) === "input_required") throw new A2AInactiveError("The A2A task is no longer active");
+    if (!this.deps.loadA2ATask) return;
+    const task = asRecord(await this.deps.loadA2ATask(taskId));
+    const state = a2aState(task.state ?? asRecord(task.status).state);
+    const messages = Array.isArray(task.messages) ? task.messages.map(asRecord) : [];
+    const latest = messages.filter((m) => String(m.role).toLowerCase() === "caller").at(-1);
+    if (String(task.id ?? "") !== taskId || !["submitted", "working"].includes(state) || (messageId && String(latest?.message_id ?? latest?.messageId ?? "") !== messageId)) {
+      if (a2aTerminal(state)) this.a2aStore.recordTask({ taskId, state });
+      throw new A2AInactiveError("The A2A task changed or is no longer active");
+    }
+  }
+
   private async guard(conv: Conversation, toolName: string, args: unknown): Promise<BeforeToolCallResult | undefined> {
+    if (conv.channel === "a2a") {
+      try { await this.assertA2AActive(conv); }
+      catch (error) {
+        if (!(error instanceof A2AInactiveError)) throw error;
+        return { block: true, reason: "This A2A task is no longer active. Stop without taking any action." };
+      }
+    }
     const { registry, policy, audit, approvals, config } = this.deps;
     const meta = registry.meta(toolName);
     if (!meta) return undefined;
@@ -526,6 +711,8 @@ export class AgentRuntime {
     const { approvals, audit } = this.deps;
     // matchReply already resolves the approval; only resolve here if a custom store left it pending.
     const resolved = match.approval.status === "pending" ? approvals.resolve(match.approval.token, match.approved) ?? match.approval : match.approval;
+    const record = this.recallRecord(resolved.conversationKey);
+    if (record?.replyRef?.taskId && !this.a2aStore.active(record.replyRef.taskId, record.replyRef.messageId)) return "That task is no longer active; no action was taken.";
     const verb = match.approved ? "approved" : "denied";
     audit.append({ kind: "approval", conversationKey: resolved.conversationKey, principal: principal.id, detail: { token: resolved.token, status: resolved.status, summary: resolved.summary } });
 
@@ -548,16 +735,17 @@ export class AgentRuntime {
     const record = live ? { principal: live.principal, deliveryKey: live.deliveryKey, replyRef: live.replyRef } : this.recallRecord(key);
     if (!record) return;
     const conv = this.conversation(key, record.principal, { deliveryKey: record.deliveryKey, replyRef: record.replyRef });
-    if (conv.busy) {
-      conv.followUp(text);
-      return;
+    if (conv.channel === "a2a") {
+      try { await this.assertA2AActive(conv); } catch (error) { if (error instanceof A2AInactiveError) return; throw error; }
     }
-    void conv.run(text).then(
-      async (reply) => {
-        if (reply) await this.deliver(conv, reply);
-      },
-      (error: unknown) => this.auditError(key, record.principal, error),
-    );
+    if (conv.busy) {
+      // The current run owns this transcript until it has persisted and delivered.
+      const running = this.inboundQueues.get(key);
+      if (running) await running;
+      else await conv.agent.waitForIdle();
+    }
+    const reply = await conv.run(text);
+    if (reply) await this.deliver(conv, reply);
   }
 
   // -------------------------------------------------------------------------
@@ -579,6 +767,8 @@ export class AgentRuntime {
     const out: OutboundMessage = { channel: channel as OutboundChannel, conversationKey: conv.deliveryKey, text, replyRef: conv.replyRef };
     if (channel === "a2a") {
       if (conv.repliedViaTool) return;
+      if (!this.a2aStore.active(conv.replyRef.taskId ?? "", conv.replyRef.messageId)) return;
+      try { await this.assertA2AActive(conv); } catch (error) { if (error instanceof A2AInactiveError) return; throw error; }
       const taskId = conv.replyRef.taskId;
       if (!taskId) {
         this.deps.audit.append({ kind: "error", conversationKey: conv.key, principal: conv.principal.id, detail: { message: "A2A reply dropped: no task id on record" } });
@@ -590,6 +780,7 @@ export class AgentRuntime {
     // A reply to the owner changes what their next bare "yes" is about, unless this run raised the question.
     if (conv.principal.kind === "owner" && !opts.keepPrompt) this.deps.approvals.clearPrompted();
     await this.safeSend(out, conv.principal, conv.key);
+    if (out.a2a && out.a2a.intent === "complete") this.a2aStore.recordTask({ taskId: out.a2a.taskId, state: "completed" });
   }
 
   /**
@@ -623,7 +814,7 @@ export class AgentRuntime {
       return true;
     } catch (error) {
       this.auditError(conversationKey, principal, error);
-      return false;
+      throw error;
     }
   }
 
@@ -691,6 +882,12 @@ export class AgentRuntime {
         return conv.principal;
       },
       conversationKey: conv.key,
+      get deliveryKey() { return conv.deliveryKey; },
+      get replyRef() { return conv.replyRef; },
+      assertA2AActive: () => this.assertA2AActive(conv),
+      markA2AState: (state) => {
+        if (conv.replyRef.taskId) this.a2aStore.recordTask({ taskId: conv.replyRef.taskId, state });
+      },
       channel: conv.channel,
       now: this.now,
     };
@@ -702,10 +899,10 @@ export class AgentRuntime {
    * In a group thread every reply is visible to everyone, so the owner acts at the lowest
    * tier present. Unknown participants are strangers; an unknown member list caps to stranger.
    */
-  private capForGroup(owner: Principal, msg: InboundMessage): Principal {
+  private capForGroup(sender: Principal, msg: InboundMessage): Principal {
     const ownerPhones = new Set(this.deps.config.owner.phones.map(normalizePhone));
     const participants = Array.isArray(msg.meta?.participants) ? (msg.meta!.participants as unknown[]).filter((p): p is string => typeof p === "string") : [];
-    let lowest: Tier = "owner";
+    let lowest: Tier = sender.tier;
     let others = 0;
     for (const raw of participants) {
       const phone = normalizePhone(raw);
@@ -715,7 +912,7 @@ export class AgentRuntime {
       if (TIER_ORDER.indexOf(tier) > TIER_ORDER.indexOf(lowest)) lowest = tier;
     }
     if (others === 0) lowest = "stranger";
-    return { ...owner, tier: lowest, cappedFrom: "owner" };
+    return { ...sender, tier: lowest, cappedFrom: sender.tier };
   }
 
   // -------------------------------------------------------------------------
@@ -724,10 +921,14 @@ export class AgentRuntime {
 
   private seenBefore(id: string): boolean {
     const seen = this.deps.state.readJson<string[]>(SEEN_FILE, []);
-    if (seen.includes(id)) return true;
+    return seen.includes(id);
+  }
+
+  private markSeen(id: string): void {
+    const seen = this.deps.state.readJson<string[]>(SEEN_FILE, []);
+    if (seen.includes(id)) return;
     seen.push(id);
     this.deps.state.writeJson(SEEN_FILE, seen.slice(-SEEN_IDS_MAX));
-    return false;
   }
 
   private rememberConversation(conv: Conversation): void {
@@ -1054,7 +1255,7 @@ function withAttachments(text: string, msg: InboundMessage): string {
   const lines = msg.attachments.map((a) => {
     const name = flat(a.name, 200);
     const type = flat(a.mimeType, 80);
-    const where = a.path ? ` path=${flat(a.path, 300)}` : a.url ? ` url=${flat(a.url, 500)}` : "";
+    const where = a.path ? ` path=${flat(a.path, 300)}` : a.url ? ` url=${a.url.replace(/[\r\n]+/g, "").trim()}` : "";
     return `[attachment${name ? ` ${name}` : ""}${type ? ` ${type}` : ""}${where}]`;
   });
   return `${text}\n${lines.join("\n")}`;
@@ -1107,8 +1308,13 @@ function isGroup(msg: InboundMessage): boolean {
  * still land in the shared thread.
  */
 export function runtimeKey(msg: InboundMessage, principal: Principal): string {
+  if (msg.channel === "a2a" && msg.replyRef.taskId) return `${msg.conversationKey}:task:${msg.replyRef.taskId}${msg.replyRef.messageId ? `:message:${msg.replyRef.messageId}` : ""}`;
   if (!isGroup(msg)) return msg.conversationKey;
   return `${msg.conversationKey}:${principal.id}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function channelOf(key: string): Channel {

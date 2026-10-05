@@ -43,6 +43,8 @@ export interface ProvisionInput {
   description?: string;
   imessage?: boolean;
   phone?: boolean;
+  /** Only for an explicit operator import, never a new-user signup. */
+  reuseExisting?: boolean;
 }
 
 type Dict = Record<string, unknown>;
@@ -94,15 +96,15 @@ export class InkboxProvisioner {
   }
 
   /**
-   * Create the identity, or reuse one with the same handle. A taken handle gets a
-   * numeric suffix; a plan limit surfaces as InkboxPlanLimitError; a phone quota
+   * Create a fresh identity. An operator can explicitly import an existing one.
+   * A taken handle gets a numeric suffix; a plan limit surfaces as InkboxPlanLimitError; a phone quota
    * (429) falls back to an identity without a dedicated number.
    */
   async provisionIdentity(input: ProvisionInput): Promise<ProvisionedIdentity> {
     const base = input.handle.replace(/^@+/, "").toLowerCase();
     const wantIMessage = input.imessage ?? true;
 
-    const existing = await this.getIdentity(base);
+    const existing = input.reuseExisting ? await this.getIdentity(base) : undefined;
     if (existing) {
       if (wantIMessage && !existing.imessageEnabled) {
         const raw = await this.rest.request<Dict>("PATCH", `/identities/${encodeURIComponent(base)}`, { imessage_enabled: true });
@@ -158,6 +160,20 @@ export class InkboxProvisioner {
     return key;
   }
 
+  async getSigningKeyStatus(handle: string): Promise<{ configured: boolean }> {
+    return this.rest.request("GET", `/identities/${encodeURIComponent(handle)}/signing-key`);
+  }
+
+  /** Do not replace a key other receivers may still be using without an explicit rotation. */
+  async ensureSigningKey(handle: string, opts: { knownSigningKey?: string; rotate?: boolean } = {}): Promise<string> {
+    const status = await this.getSigningKeyStatus(handle);
+    if (status.configured && !opts.rotate) {
+      if (opts.knownSigningKey) return opts.knownSigningKey;
+      throw new Error(`A signing key already exists for @${handle}. Supply INKBOX_SIGNING_KEY or explicitly rotate it with --rotate-signing-key.`);
+    }
+    return this.createSigningKey(handle);
+  }
+
   async subscribeWebhooks(
     identityId: string,
     url: string,
@@ -203,7 +219,13 @@ export class InkboxProvisioner {
         direction,
       });
     } catch (err) {
-      if (isHttpStatus(err, 409)) return;
+      if (isHttpStatus(err, 409)) {
+        const rules = await this.rest.request<Dict[]>("GET", `/identities/${encodeURIComponent(handle)}/a2a/contact-rules`);
+        const target = peerHandle.replace(/^@+/, "").toLowerCase();
+        const existing = rules.find((rule) => rule.match_type === "handle" && str(rule.match_target)?.toLowerCase() === target && rule.direction === direction);
+        if (existing?.action === "allow") return;
+        throw new Error(`The existing A2A contact rule for @${target} does not allow ${direction} traffic. Review the rule before inviting this agent.`);
+      }
       throw err;
     }
   }

@@ -1,9 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Contact } from "@open-instinct/core";
+import { A2AStore, StateDir } from "@open-instinct/core";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { networkTools } from "../src/tools.js";
 import { agentPrincipal, config, contactPrincipal, ctx, fakeA2a, fakeAudit, fakeContacts, fakeOutbox, fakePolicy, fakeProvisioner, owner, run, stranger } from "./fakes.js";
 
-function setup(opts: { a2a?: boolean; provisioner?: boolean; handle?: boolean } = {}) {
+function setup(opts: { a2a?: boolean; provisioner?: boolean; handle?: boolean; a2aStore?: A2AStore } = {}) {
   const contacts = fakeContacts([
     { name: "Sam Lee", tier: "partner", phones: ["(617) 555-0101"], emails: ["sam@example.com"], agentHandle: "sam-instinct" },
     { name: "Alex Kim", tier: "friend", phones: ["+16175550102"] },
@@ -24,6 +28,7 @@ function setup(opts: { a2a?: boolean; provisioner?: boolean; handle?: boolean } 
     audit,
     outbox,
     a2a: opts.a2a === false ? undefined : a2a,
+    ...(opts.a2aStore ? { a2aStore: opts.a2aStore } : {}),
     provisioner: opts.provisioner ? provisioner : undefined,
     onPolicyChange: (p) => changes.push(p),
   });
@@ -201,6 +206,14 @@ describe("trust_grant / trust_revoke / trust_list", () => {
 });
 
 describe("ask_instinct", () => {
+  it("refuses nested delegation from a worker task instead of orphaning the child result", async () => {
+    const { tools, a2a, sam } = setup();
+    const result = await run(tools, "ask_instinct", { contact: "sam", intent: "ask", text: "Please check" }, ctx(agentPrincipal(sam), { channel: "a2a", replyRef: { taskId: "parent-task" } }));
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("ask_caller");
+    expect(a2a.calls).toHaveLength(0);
+  });
+
   it("sends text plus an OIP data part over A2A when the contact has an Instinct", async () => {
     const { tools, a2a, audit, outbox } = setup();
     const r = await run(
@@ -221,7 +234,7 @@ describe("ask_instinct", () => {
       on_behalf_of: { handle: "maria-instinct", display: "Maria" },
       payload: { slots: [{ start: "2026-10-07T19:00:00-04:00" }] },
     });
-    expect(opts).toEqual({ contextId: "ctx-9" });
+    expect(opts).toEqual({ contextId: "ctx-9", messageId: expect.any(String) });
     expect(r.text).toContain("task task-1");
     expect(r.text).toContain("reply will arrive here");
     expect(r.details).toMatchObject({ taskId: "task-1", contextId: "ctx-1", state: "TASK_STATE_WORKING" });
@@ -367,17 +380,25 @@ describe("ask_instinct", () => {
       expect(entry.principal).toBe("contact:jo-rivera");
     });
 
-    it("uses the human behind an agent principal for on_behalf_of", async () => {
-      const { tools, a2a, contacts } = setup();
-      const jo = contacts.upsert({ name: "Jo Rivera", tier: "friend", agentHandle: "jo-instinct" });
-      await run(tools, "ask_instinct", { contact: "jo-rivera", intent: "ask", text: "ping" }, ctx(agentPrincipal(jo), { channel: "a2a", conversationKey: "a2a:ctx-2" }));
-      const data = a2a.calls[0]!.args[2] as Record<string, unknown>;
-      expect(data.on_behalf_of).toEqual({ handle: "maria-instinct", display: "Jo Rivera" });
-    });
   });
 });
 
 describe("reply_instinct", () => {
+  it("uses only the runtime-bound task, ignoring a supplied task ID from another conversation", async () => {
+    const { tools, a2a } = setup();
+    const active = ctx(stranger, { channel: "a2a", replyRef: { taskId: "trusted-task" }, assertA2AActive: async () => {} });
+    await run(tools, "reply_instinct", { taskId: "other-callers-task", intent: "complete", text: "answer" }, active);
+    expect(a2a.calls[0]?.args[0]).toBe("trusted-task");
+    expect(tools.find((t) => t.spec.name === "reply_instinct")?.spec.parameters.properties).not.toHaveProperty("taskId");
+  });
+
+  it("refuses worker replies without a binding or after the task fence closes", async () => {
+    const { tools, a2a } = setup();
+    const missing = await run(tools, "reply_instinct", { intent: "complete", text: "answer" }, ctx(stranger, { channel: "a2a" }));
+    expect(missing.isError).toBe(true);
+    await expect(run(tools, "reply_instinct", { intent: "complete", text: "answer" }, ctx(stranger, { channel: "a2a", replyRef: { taskId: "t" }, assertA2AActive: async () => { throw new Error("task canceled"); } }))).rejects.toThrow("task canceled");
+    expect(a2a.calls).toHaveLength(0);
+  });
   it("only works inside an A2A conversation", async () => {
     const { tools, a2a, sam } = setup();
     const r = await run(tools, "reply_instinct", { taskId: "t1", intent: "complete", text: "ok" }, ctx(agentPrincipal(sam)));
@@ -387,7 +408,7 @@ describe("reply_instinct", () => {
 
   it("wraps the payload as OIP when an intent is named and passes raw payloads through", async () => {
     const { tools, a2a, sam } = setup();
-    const a2aCtx = ctx(agentPrincipal(sam), { channel: "a2a", conversationKey: "a2a:ctx-1" });
+    const a2aCtx = ctx(agentPrincipal(sam), { channel: "a2a", conversationKey: "a2a:ctx-1", replyRef: { taskId: "t1" }, assertA2AActive: async () => {} });
     await run(tools, "reply_instinct", { taskId: "t1", intent: "complete", text: "Thu works", oipIntent: "accept", payload: { slot: { start: "2026-10-09T19:00:00-04:00" } } }, a2aCtx);
     expect(a2a.calls[0]!.args).toEqual(["t1", "complete", "Thu works", { oip: "1", intent: "accept", on_behalf_of: { handle: "maria-instinct", display: "Maria" }, payload: { slot: { start: "2026-10-09T19:00:00-04:00" } } }]);
     await run(tools, "reply_instinct", { taskId: "t1", intent: "progress", text: "checking", payload: { eta: "10m" } }, a2aCtx);
@@ -404,7 +425,7 @@ describe("reply_instinct", () => {
 
   it("turns an Inkbox 429 into guidance with the wait, and rethrows other errors", async () => {
     const { tools, a2a, sam } = setup();
-    const a2aCtx = ctx(agentPrincipal(sam), { channel: "a2a", conversationKey: "a2a:ctx-1" });
+    const a2aCtx = ctx(agentPrincipal(sam), { channel: "a2a", conversationKey: "a2a:ctx-1", replyRef: { taskId: "t1" }, assertA2AActive: async () => {} });
     let fail: unknown = Object.assign(new Error("Inkbox HTTP 429"), { name: "InkboxHttpError", status: 429, retryAfterSeconds: 7 });
     (a2a as unknown as { reply: () => Promise<void> }).reply = async () => {
       throw fail;
@@ -416,6 +437,28 @@ describe("reply_instinct", () => {
     expect((await run(tools, "reply_instinct", { taskId: "t1", intent: "complete", text: "ok" }, a2aCtx)).text).toContain("a few seconds");
     fail = Object.assign(new Error("Inkbox HTTP 500"), { status: 500 });
     await expect(run(tools, "reply_instinct", { taskId: "t1", intent: "complete", text: "ok" }, a2aCtx)).rejects.toThrow(/500/);
+  });
+});
+
+describe("durable caller task routing", () => {
+  it("records the route before send, then continues only the task delegated from this conversation", async () => {
+    const state = new StateDir(mkdtempSync(join(tmpdir(), "instinct-a2a-route-")));
+    const store = new A2AStore(state);
+    const { tools, a2a } = setup({ a2aStore: store });
+    const send = a2a.send;
+    a2a.send = async (...args) => {
+      const options = args[3];
+      expect(store.byMessage(options!.messageId!)).toMatchObject({ conversationKey: "imessage:conv-1", deliveryKey: "imessage:wire-thread" });
+      return send(...args);
+    };
+    const context = ctx(owner, { deliveryKey: "imessage:wire-thread" });
+    await run(tools, "ask_instinct", { contact: "sam", intent: "ask", text: "Which day?" }, context);
+    expect(new A2AStore(state).delegation("task-1")?.principal.id).toBe("owner");
+    await run(tools, "ask_instinct", { contact: "sam", intent: "ask", text: "Thursday", taskId: "task-1" }, context);
+    expect(a2a.calls[1]?.args[3]).toMatchObject({ taskId: "task-1" });
+    const refused = await run(tools, "ask_instinct", { contact: "sam", intent: "ask", text: "Wrong thread", taskId: "task-1" }, ctx(owner, { conversationKey: "imessage:other" }));
+    expect(refused.isError).toBe(true);
+    expect(a2a.calls).toHaveLength(2);
   });
 });
 

@@ -311,6 +311,16 @@ describe("deploy", () => {
     expect(r.out).not.toContain("ik_secret");
   });
 
+  it("keeps the Inkbox endpoint with the deployed identity credentials", async () => {
+    const dir = await seeded();
+    const result = await run(["deploy", "--image", "img:1", "--dry-run"], {
+      INSTINCT_DATA_DIR: dir, ANTHROPIC_API_KEY: "model_test", INKBOX_BASE_URL: "https://inkbox.example",
+    });
+    expect(result.code, result.err).toBe(0);
+    const body = JSON.parse(result.out);
+    expect(body.initialEnvVars).toContainEqual({ key: "INKBOX_BASE_URL", value: "https://inkbox.example", isSecret: false });
+  });
+
   it("--maritime-llm asks Maritime for its metered model and points INSTINCT_MODEL at it", async () => {
     const dir = await seeded();
     const r = await run(["deploy", "--image", "img:1", "--maritime-llm", "--dry-run"], { INSTINCT_DATA_DIR: dir, OPENAI_API_KEY: "sk-mine", OPENAI_BASE_URL: "http://mine" });
@@ -428,6 +438,7 @@ describe("dev", () => {
         return { subscriptionId: "sub_1", created: true };
       },
       readWebhookSecrets: () => ({ signingKey: "from-webhook-file" }),
+      listenTunnelServer: async () => ({ listen: () => {}, address: () => ({ port: 9124 }), close: (cb?: () => void) => cb?.() }),
     };
     return { mod, seen };
   }
@@ -440,7 +451,7 @@ describe("dev", () => {
     const env: NodeJS.ProcessEnv = { INSTINCT_DATA_DIR: dir, INKBOX_API_KEY: "already-set" };
     const r = await run(["dev", "--port", "9123"], env, { importServer: async () => mod, installSignalHandlers: false });
     expect(r.code, r.err).toBe(0);
-    expect(seen.listened).toEqual([9123, "0.0.0.0"]);
+    expect(seen.listened).toEqual([9123, "127.0.0.1"]);
     expect(seen.bootEnv?.PORT).toBe("9123");
     expect(seen.bootEnv?.INSTINCT_TUNNEL).toBeUndefined();
     expect(seen.bootEnv?.INSTINCT_DATA_DIR).toBe(dir);
@@ -470,7 +481,7 @@ describe("dev", () => {
     });
     expect(r.code, r.err).toBe(0);
     expect(seen.bootEnv?.INSTINCT_TUNNEL).toBe("1");
-    expect(tunnels[0]).toMatchObject({ apiKey: "ik", handle: "maria-instinct", forwardTo: "http://127.0.0.1:8080" });
+    expect(tunnels[0]).toMatchObject({ apiKey: "ik", handle: "maria-instinct", forwardTo: "http://127.0.0.1:9124" });
     expect(seen.webhook).toMatchObject({ adminApiKey: "ak", handle: "maria-instinct", identityId: "idn_1", url: "https://maria-instinct.inkboxwire.com/webhooks/inkbox" });
     expect(r.out).toContain("sub_1");
     // Without a signing key in env, the provider falls back to the server's webhook file.

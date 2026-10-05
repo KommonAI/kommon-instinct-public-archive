@@ -10,7 +10,8 @@ import { ContactStore } from "../src/contacts.js";
 import { MemoryStore } from "../src/memory.js";
 import { PolicyEngine, defaultPolicy } from "../src/policy.js";
 import { coreTools } from "../src/core-tools.js";
-import { AgentRuntime, SESSION_KEEP_MESSAGES, hashArgs, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
+import { A2AStore } from "../src/a2a-state.js";
+import { AgentRuntime, InboundUncertainError, SESSION_KEEP_MESSAGES, hashArgs, restoreMessages, runtimeKey, stableJson, type Outbox, type RuntimeDeps } from "../src/runtime.js";
 import { Scheduler } from "../src/scheduler.js";
 import { ToolRegistry, defineTool, textResult, type RegisteredTool } from "../src/tools.js";
 import type { InboundMessage, OutboundMessage, Policy, Principal } from "../src/types.js";
@@ -231,9 +232,9 @@ describe("AgentRuntime.handleInbound", () => {
     expect(h.deps.audit.read({ kinds: ["inbound"] })).toHaveLength(1);
   });
 
-  it("steers a busy conversation instead of starting a second run", async () => {
+  it("queues a busy conversation until its current run is persisted", async () => {
     const h = harness({ replyBudgetMs: 20 });
-    h.faux.setResponses([toolTurn("slow", {}), textTurn("finished after steer")]);
+    h.faux.setResponses([toolTurn("slow", {}), textTurn("first finished"), textTurn("second finished")]);
     const first = await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "do slow thing", id: "a" }));
     expect(first.reply).toMatch(/On it/);
 
@@ -241,17 +242,17 @@ describe("AgentRuntime.handleInbound", () => {
     expect(conv.busy).toBe(true);
     const second = await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "also do this", id: "b" }));
     expect(second).toMatchObject({ acked: true });
-    expect(second.reply).toBeUndefined();
-    expect(conv.agent.peekQueuedMessages()).toHaveLength(1);
+    expect(second.reply).toMatch(/On it/);
+    expect(conv.agent.peekQueuedMessages()).toHaveLength(0);
     expect(h.runtime.stats().busy).toBe(1);
 
     h.gate.open();
     await vi.waitFor(() => expect(conv.busy).toBe(false));
     expect(conv.agent.hasQueuedMessages()).toBe(false);
-    // The steered text reached the model as a user message before the final answer.
+    // The queued text reached its own run after the first answer.
     expect(userTexts(conv.agent.state.messages).some((t) => t.includes("also do this"))).toBe(true);
     // Dashboard chat has no outbox: the late reply waits for the next /chat on this key.
-    await vi.waitFor(() => expect(h.runtime.pendingReplies("chat:main")).toContain("finished after steer"));
+    await vi.waitFor(() => expect(h.runtime.pendingReplies("chat:main").join("\n")).toContain("second finished"));
     expect(h.sent).toHaveLength(0);
   });
 
@@ -329,7 +330,7 @@ describe("AgentRuntime.handleInbound", () => {
     h.faux.setResponses([textTurn("Thursday works.")]);
     const data = { oip: "1", intent: "propose_times", subject: "dinner", payload: { slots: [{ start: "2026-10-07T19:00:00-04:00", end: "2026-10-07T22:00:00-04:00" }] }, reply_by: "2026-10-06T12:00:00-04:00" };
     await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "hi", { data }));
-    const conv = h.runtime.conversation("a2a:ctx1", { kind: "agent", id: `agent:${SAM_HANDLE}`, tier: "partner", displayName: "x" });
+    const conv = h.runtime.conversation("a2a:ctx1:task:task_1", { kind: "agent", id: `agent:${SAM_HANDLE}`, tier: "partner", displayName: "x" });
     const prompt = userTexts(conv.agent.state.messages)[0]!;
     expect(prompt).toContain('intent \\"propose_times\\"');
     expect(prompt).toContain("2026-10-07T19:00:00-04:00");
@@ -546,7 +547,7 @@ describe("approval flow", () => {
     expect(samConv.busy).toBe(true);
 
     await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: "yes" }));
-    expect(samConv.agent.peekQueuedMessages()).toHaveLength(1);
+    expect(samConv.agent.peekQueuedMessages()).toHaveLength(0);
     h.gate.open();
     await vi.waitFor(() => expect(samConv.busy).toBe(false));
   });
@@ -653,8 +654,10 @@ describe("approval scoping", () => {
     await vi.waitFor(() => expect(h.calls.some((c) => c.tool === "slow")).toBe(true));
     const token = h.deps.approvals.pending()[0]!.token;
 
-    h.faux.setResponses([textTurn("Mom reminder moved to 7.")]);
-    const r = await h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: `yes ${token} and move the mom reminder to 7` }));
+    h.faux.setResponses([textTurn("Previous run finished."), textTurn("Approval received."), textTurn("Mom reminder moved to 7.")]);
+    const ownerRun = h.runtime.handleInbound(inbound({ channel: "chat", from: "owner", conversationKey: "chat:main", text: `yes ${token} and move the mom reminder to 7` }), { waitForCompletion: true });
+    h.gate.open();
+    const r = await ownerRun;
     expect(r.reply).toMatch(/^Approved: .*\n\nMom reminder moved to 7\.$/);
     expect(h.deps.approvals.pending()).toHaveLength(0);
     const main = h.runtime.conversation("chat:main", h.runtime.ownerPrincipal());
@@ -686,6 +689,16 @@ describe("approval scoping", () => {
 });
 
 describe("group threads", () => {
+  it("caps a partner and their personal grants to the least-trusted group member", async () => {
+    const h = harness();
+    const sam = h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", phones: [SAM_PHONE] });
+    h.deps.policy.addGrant({ to: `contact:${sam.id}`, capabilities: ["email.read"] });
+    h.faux.setResponses([toolTurn("email_read", {}), textTurn("I cannot share your inbox here.")]);
+    const result = await h.runtime.handleInbound(inbound({ channel: "imessage", from: SAM_PHONE, conversationKey: "imessage:shared", meta: { isGroup: true, participants: [SAM_PHONE, OWNER_PHONE, "+15555550123"] } }));
+    expect(result.principal).toMatchObject({ tier: "stranger", cappedFrom: "partner" });
+    expect(h.calls.filter((c) => c.tool === "email_read")).toHaveLength(0);
+  });
+
   const GROUP = "imessage:g1";
   const STRANGER_PHONE = "+12125550000";
   const groupMsg = (from: string, text: string, participants: string[], id?: string) =>
@@ -770,6 +783,164 @@ describe("group threads", () => {
 });
 
 describe("A2A delivery", () => {
+  it("never raises the captured group audience cap when refreshing a delegated contact", async () => {
+    const h = harness();
+    const contact = h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", phones: [SAM_PHONE] });
+    const captured: Principal = { kind: "contact", id: `contact:${contact.id}`, contactId: contact.id, tier: "stranger", cappedFrom: "partner", displayName: contact.name };
+    new A2AStore(h.deps.state).begin({ messageId: "group-msg", peer: "remote-agent", taskId: "group-task", principal: captured, conversationKey: `imessage:group:contact:${contact.id}`, deliveryKey: "imessage:group" });
+    h.faux.setResponses([textTurn("A reply arrived.")]);
+    const result = await h.runtime.handleInbound(a2aFrom("remote-agent", "answer", { replyRef: { taskId: "group-task", contextId: "remote" }, meta: { direction: "sent", state: "completed" } }), { waitForCompletion: true });
+    expect(result.principal).toMatchObject({ tier: "stranger", cappedFrom: "partner" });
+    expect(h.sent[0]?.msg.conversationKey).toBe("imessage:group");
+  });
+
+  it("retains a stricter group cap observed after delegation, including after restart", async () => {
+    const h = harness();
+    const contact = h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", phones: [SAM_PHONE] });
+    const captured: Principal = { kind: "contact", id: `contact:${contact.id}`, contactId: contact.id, tier: "friend", cappedFrom: "partner", displayName: contact.name };
+    const key = `imessage:group:contact:${contact.id}`;
+    new A2AStore(h.deps.state).begin({ messageId: "group-msg", peer: "remote-agent", taskId: "group-task", principal: captured, conversationKey: key, deliveryKey: "imessage:group" });
+    h.runtime.conversation(key, { ...captured, tier: "stranger" }, { deliveryKey: "imessage:group" });
+    const restarted = new AgentRuntime(h.deps);
+    h.faux.setResponses([textTurn("A reply arrived.")]);
+    const result = await restarted.handleInbound(a2aFrom("remote-agent", "answer", { replyRef: { taskId: "group-task", contextId: "remote" }, meta: { direction: "sent", state: "completed" } }), { waitForCompletion: true });
+    expect(result.principal).toMatchObject({ tier: "stranger", cappedFrom: "partner" });
+  });
+
+  it("applies a group audience reduction queued before a delegated result executes", async () => {
+    const h = harness();
+    const contact = h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", phones: [SAM_PHONE] });
+    const friendPhone = "+14155550123";
+    const strangerPhone = "+14155550999";
+    h.deps.contacts.upsert({ name: "Friend", tier: "friend", phones: [friendPhone] });
+    const groupMessage = (id: string, participants: string[]) => inbound({
+      id, channel: "imessage", from: SAM_PHONE, conversationKey: "imessage:group", text: "Group update",
+      meta: { isGroup: true, participants },
+    });
+    h.faux.setResponses([toolTurn("slow", {}), textTurn("First turn finished."), textTurn("Audience updated."), textTurn("Peer replied.")]);
+    const first = h.runtime.handleInbound(groupMessage("group-running", [OWNER_PHONE, SAM_PHONE, friendPhone]), { waitForCompletion: true });
+    await vi.waitFor(() => expect(h.calls.some((call) => call.tool === "slow")).toBe(true));
+    const captured: Principal = { kind: "contact", id: `contact:${contact.id}`, contactId: contact.id, tier: "friend", cappedFrom: "partner", displayName: contact.name };
+    new A2AStore(h.deps.state).begin({ messageId: "group-msg", peer: "remote-agent", taskId: "group-task", principal: captured, conversationKey: `imessage:group:contact:${contact.id}`, deliveryKey: "imessage:group" });
+
+    const tighter = h.runtime.handleInbound(groupMessage("group-tighter", [OWNER_PHONE, SAM_PHONE, strangerPhone]), { waitForCompletion: true });
+    // Let the second event enter the same conversation queue while its first turn is blocked.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const result = h.runtime.handleInbound(a2aFrom("remote-agent", "answer", {
+      id: "group-result", replyRef: { taskId: "group-task", contextId: "remote" }, meta: { direction: "sent", state: "completed" },
+    }), { waitForCompletion: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    h.gate.open();
+    const [, updated, delivered] = await Promise.all([first, tighter, result]);
+    expect(updated.principal.tier).toBe("stranger");
+    expect(delivered.principal).toMatchObject({ tier: "stranger", cappedFrom: "partner" });
+  });
+
+  it("routes a persisted delegation result to the original owner thread, without replying as its worker", async () => {
+    const h = harness();
+    const store = new A2AStore(h.deps.state);
+    store.begin({ messageId: "outbound-msg", peer: SAM_HANDLE, taskId: "outbound-task", contextId: "remote-context", principal: h.runtime.ownerPrincipal(), conversationKey: "imessage:original", deliveryKey: "imessage:original" });
+    const again = new AgentRuntime(h.deps);
+    h.faux.setResponses([textTurn("Sam can do Thursday.")]);
+    await again.handleInbound(a2aFrom(SAM_HANDLE, "Thursday works", { id: "remote-answer", conversationKey: "a2a:remote-context", replyRef: { taskId: "outbound-task", contextId: "remote-context" }, meta: { eventType: "a2a.sent_task.updated", direction: "sent", state: "completed" } }), { waitForCompletion: true });
+    expect(h.sent.map((s) => s.msg)).toEqual([expect.objectContaining({ channel: "imessage", conversationKey: "imessage:original", text: "Sam can do Thursday." })]);
+    const conv = again.conversation("imessage:original", again.ownerPrincipal());
+    expect(userTexts(conv.agent.state.messages).join("\n")).toContain("untrusted");
+  });
+
+  it("recovers a delegation whose send response was lost by matching its persisted message ID", async () => {
+    const h = harness();
+    const store = new A2AStore(h.deps.state);
+    store.begin({ messageId: "lost-response-msg", peer: SAM_HANDLE, principal: h.runtime.ownerPrincipal(), conversationKey: "imessage:original", deliveryKey: "imessage:original" });
+    const again = new AgentRuntime({ ...h.deps, loadA2ATask: async () => ({ id: "outbound-task", context_id: "remote-context", target: { handle: SAM_HANDLE }, messages: [{ role: "caller", message_id: "lost-response-msg" }] }) });
+    h.faux.setResponses([textTurn("Recovered answer.")]);
+    await again.handleInbound(a2aFrom(SAM_HANDLE, "answer", { replyRef: { taskId: "outbound-task", contextId: "remote-context" }, meta: { direction: "sent", state: "completed" } }), { waitForCompletion: true });
+    expect(store.delegation("outbound-task")?.conversationKey).toBe("imessage:original");
+    expect(h.sent[0]?.msg.channel).toBe("imessage");
+  });
+
+  it("keeps simultaneous tasks in one context on their own immutable reply targets", async () => {
+    const h = harness({ replyBudgetMs: 10 });
+    h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", agentHandle: SAM_HANDLE });
+    h.faux.setResponses([toolTurn("slow", {}), textTurn("Second task answer"), textTurn("First task answer")]);
+    const first = h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "first", { id: "first-event" }), { waitForCompletion: true });
+    await vi.waitFor(() => expect(h.calls.some((c) => c.tool === "slow")).toBe(true));
+    await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "second", { id: "second-event", replyRef: { taskId: "task_2", contextId: "ctx1" } }), { waitForCompletion: true });
+    h.gate.open();
+    await first;
+    expect(h.sent.filter((s) => s.msg.channel === "a2a").map((s) => [s.msg.a2a?.taskId, s.msg.text])).toEqual([["task_2", "Second task answer"], ["task_1", "First task answer"]]);
+  });
+
+  it("does not let a delayed admission snapshot replace a newer caller generation", async () => {
+    const delayed = makeGate();
+    let reads = 0;
+    const snapshot = (messageId: string) => ({ id: "task_1", context_id: "ctx1", state: "working", caller: { handle: SAM_HANDLE }, messages: [{ role: "caller", message_id: messageId, parts: [{ text: messageId }] }] });
+    const h = harness({ deps: { loadA2ATask: async () => {
+      if (++reads === 1) { await delayed.promise; return snapshot("older-message"); }
+      return snapshot("newer-message");
+    } } });
+    h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", agentHandle: SAM_HANDLE });
+    h.faux.setResponses([textTurn("Answer."), textTurn("Answer.")]);
+    const older = h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "old", { id: "older-event", replyRef: { taskId: "task_1", contextId: "ctx1", messageId: "older-message" } }), { waitForCompletion: true });
+    await vi.waitFor(() => expect(reads).toBe(1));
+    const newer = h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "new", { id: "newer-event", replyRef: { taskId: "task_1", contextId: "ctx1", messageId: "newer-message" } }), { waitForCompletion: true });
+    await flush();
+    // The second read cannot overtake the delayed first read and record its snapshot first.
+    expect(reads).toBe(1);
+    delayed.open();
+    await Promise.all([older, newer]);
+    expect(new A2AStore(h.deps.state).task("task_1")?.messageId).toBe("newer-message");
+    expect(h.sent.filter((s) => s.msg.channel === "a2a").map((s) => s.msg.replyRef?.messageId)).toEqual(["newer-message"]);
+  });
+
+  it("cancels active work and prevents later tool calls or completion", async () => {
+    const h = harness();
+    h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", agentHandle: SAM_HANDLE });
+    h.faux.setResponses([toolTurn("slow", {}), toolTurn("echo", { text: "must not run" }), textTurn("stopped")]);
+    const running = h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "slow request", { id: "to-cancel" }), { waitForCompletion: true });
+    await vi.waitFor(() => expect(h.calls.some((c) => c.tool === "slow")).toBe(true));
+    await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "cancel", { id: "cancel-event", meta: { eventType: "a2a.task.canceled", state: "canceled" } }), { waitForCompletion: true });
+    h.gate.open();
+    await running;
+    expect(h.calls.filter((c) => c.tool === "echo")).toEqual([]);
+    expect(h.sent.filter((s) => s.msg.channel === "a2a")).toEqual([]);
+  });
+
+  it("does not admit a delayed event for an already terminal task", async () => {
+    const h = harness({ deps: { loadA2ATask: async () => ({ id: "task_1", context_id: "ctx1", state: "canceled" }) } });
+    const result = await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, "old request"), { waitForCompletion: true });
+    expect(result.blocked).toBe("inactive-task");
+    expect(h.faux.state.callCount).toBe(0);
+  });
+
+  it("leaves pre-admission failures retryable but quarantines a failed send after execution across restarts", async () => {
+    let failAdmission = true;
+    const h = harness({ deps: { loadA2ATask: async () => {
+      if (failAdmission) throw new Error("temporarily unavailable");
+      return { id: "task_1", context_id: "ctx1", state: "working", caller: { handle: SAM_HANDLE }, messages: [{ role: "caller", message_id: "caller-msg", parts: [{ text: "request" }] }] };
+    } } });
+    h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", agentHandle: SAM_HANDLE });
+    const msg = a2aFrom(SAM_HANDLE, "request", { id: "retry-event", replyRef: { taskId: "task_1", contextId: "ctx1", messageId: "caller-msg" } });
+    await expect(h.runtime.handleInbound(msg, { waitForCompletion: true })).rejects.toThrow("temporarily unavailable");
+    expect(h.faux.state.callCount).toBe(0);
+    failAdmission = false;
+    h.faux.setResponses([textTurn("answer")]);
+    h.deps.outbox.send = async () => { throw new Error("response lost"); };
+    await expect(h.runtime.handleInbound(msg, { waitForCompletion: true })).rejects.toBeInstanceOf(InboundUncertainError);
+    const restarted = new AgentRuntime(h.deps);
+    await expect(restarted.handleInbound(msg, { waitForCompletion: true })).rejects.toBeInstanceOf(InboundUncertainError);
+    expect(h.faux.state.callCount).toBe(1);
+  });
+
+  it("does not let a delegated peer answer an owner's approval", async () => {
+    const h = harness();
+    const pending = h.deps.approvals.create({ conversationKey: "imessage:original", requestedBy: "owner", summary: "purchase", capability: "purchase" });
+    new A2AStore(h.deps.state).begin({ messageId: "outbound-msg", peer: SAM_HANDLE, taskId: "outbound-task", principal: h.runtime.ownerPrincipal(), conversationKey: "imessage:original", deliveryKey: "imessage:original" });
+    h.faux.setResponses([textTurn("The remote answer is available.")]);
+    await h.runtime.handleInbound(a2aFrom(SAM_HANDLE, `yes ${pending.token}`, { replyRef: { taskId: "outbound-task", contextId: "remote" }, meta: { direction: "sent", state: "completed" } }), { waitForCompletion: true });
+    expect(h.deps.approvals.get(pending.token)?.status).toBe("pending");
+  });
+
   it("answers progress while waiting on the owner, then completes on the stored task id after approval", async () => {
     const h = harness();
     h.deps.contacts.upsert({ name: "Sam Lee", tier: "partner", agentHandle: SAM_HANDLE });
@@ -905,6 +1076,16 @@ describe("restoreMessages", () => {
 });
 
 describe("runScheduled", () => {
+  it("restores the verified private owner thread after restart without replacing it with a group", async () => {
+    const h = harness();
+    h.faux.setResponses([textTurn("Hello."), textTurn("Group hello."), textTurn("Scheduled update.")]);
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:private-owner" }));
+    await h.runtime.handleInbound(inbound({ channel: "imessage", from: OWNER_PHONE, conversationKey: "imessage:group", meta: { isGroup: true, participants: [OWNER_PHONE, "+15555550123"] } }));
+    await new AgentRuntime(h.deps).runScheduled({ id: "restart-route", enabled: true, prompt: "update", createdAt: new Date().toISOString() });
+    expect(h.sent.at(-1)?.msg).toMatchObject({ conversationKey: "imessage:private-owner", text: "Scheduled update." });
+    expect(h.sent.at(-1)?.msg.to).toBeUndefined();
+  });
+
   it("runs as the owner and texts the result to the owner's phone", async () => {
     const h = harness();
     const entry = h.deps.scheduler.create({ name: "briefing", prompt: "Summarise today", enabled: true, nextRunAt: new Date(Date.now() + 60_000).toISOString() });

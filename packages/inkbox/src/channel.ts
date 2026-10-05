@@ -6,6 +6,7 @@
  */
 import { Inkbox, type AgentIdentity, type MailAttachmentInput } from "@inkbox/sdk";
 import type { InboundMessage, OutboundMessage, Outbox, Principal } from "@open-instinct/core";
+import { createRest } from "./http.js";
 
 export interface InkboxChannelOptions {
   apiKey: string;
@@ -146,6 +147,14 @@ export class InkboxChannel implements Outbox {
     return this.identityPromise;
   }
 
+  /** Resolve a mailbox attachment without forwarding API credentials to its download URL. */
+  async emailAttachment(messageId: string, filename: string): Promise<{ url: string }> {
+    const identity = await this.identity();
+    if (!identity.emailAddress) throw new Error("This identity has no mailbox");
+    const path = [identity.emailAddress, messageId, filename].map(encodeURIComponent);
+    return createRest(this.opts).request("GET", `/mail/mailboxes/${path[0]}/messages/${path[1]}/attachments/${path[2]}`, undefined, { redirect: "false" });
+  }
+
   /**
    * Record who to answer in a thread, for outbounds that arrive without a replyRef
    * (send_message with no `to`, for example). Hosts call this per inbound message.
@@ -204,13 +213,14 @@ export class InkboxChannel implements Outbox {
   private async sendSms(msg: OutboundMessage, key: ParsedKey): Promise<void> {
     const identity = await this.identity();
     const to = toList(msg.to);
-    const target = to.length > 0 ? (to.length === 1 ? to[0] : to) : key.channel === "sms" && key.id ? key.id : undefined;
-    if (!target) throw new Error("SMS send needs a conversation key or a `to` number");
+    const conversationId = to.length === 0 && key.channel === "sms" && key.id && !key.id.startsWith("+") ? key.id : undefined;
+    const target = to.length > 0 ? (to.length === 1 ? to[0] : to) : key.channel === "sms" && key.id.startsWith("+") ? key.id : undefined;
+    if (!target && !conversationId) throw new Error("SMS send needs a conversation key or a `to` number");
     const chunks = splitMessageText(msg.text);
     if (chunks.length === 0 && (msg.mediaUrls?.length ?? 0) === 0) return;
     if (chunks.length === 0) chunks.push("");
     for (let i = 0; i < chunks.length; i++) {
-      const options: Parameters<AgentIdentity["sendText"]>[0] = { to: target };
+      const options: Parameters<AgentIdentity["sendText"]>[0] = conversationId ? { conversationId } : { to: target };
       const text = chunks[i] ?? "";
       if (text) options.text = text;
       if (i === 0 && msg.mediaUrls && msg.mediaUrls.length > 0) options.mediaUrls = msg.mediaUrls;
@@ -289,6 +299,8 @@ export class InkboxChannel implements Outbox {
     const key = parseConversationKey(conversationKey);
     if (key.channel !== "imessage") throw new Error("tapbacks are only available on iMessage conversations");
     const identity = await this.identity();
+    const target = await identity.getIMessage(messageId);
+    if (target.conversationId !== key.id) throw new Error("The reaction target must belong to the current conversation");
     await identity.sendIMessageReaction({ messageId, reaction });
   }
 

@@ -10,6 +10,7 @@ const ctx = (conversationKey: string) => ({ principal: owner, conversationKey })
 function sdkRoutes(extra: Record<string, unknown> = {}) {
   return {
     "GET /api/v1/identities/maria-instinct": { body: rawIdentity(extra) },
+    "GET /api/v1/imessage/messages/msg_1": { body: { id: "msg_1", conversation_id: "conv_1", created_at: "2026-10-03T00:00:00Z", updated_at: "2026-10-03T00:00:00Z" } },
     "POST /api/v1/imessage/messages": (req: Recorded) => ({ body: { message: { id: "sent_1", conversation_id: req.body && (req.body as { conversation_id?: string }).conversation_id, created_at: "2026-10-03T00:00:00Z", updated_at: "2026-10-03T00:00:00Z" } } }),
     "POST /api/v1/phone/numbers/pn_1/texts": { body: { id: "txt_1", created_at: "2026-10-03T00:00:00Z", updated_at: "2026-10-03T00:00:00Z" } },
     "POST /api/v1/mail/mailboxes/maria-instinct@inkbox.ai/messages": { body: { id: "mail_1", created_at: "2026-10-03T00:00:00Z" } },
@@ -76,6 +77,11 @@ describe("InkboxChannel routing", () => {
     const posts = sends("/api/v1/phone/numbers/pn_1/texts");
     expect(posts[0]?.body).toEqual({ to: "+14155550100", text: "ok" });
     expect(posts[1]?.body).toEqual({ to: "+14155550199", text: "hello" });
+  });
+
+  it("replies to a text conversation without narrowing its participants to the sender", async () => {
+    await channel().send({ channel: "sms", conversationKey: "sms:group_1", text: "Hello everyone", replyRef: { conversationId: "group_1" } }, ctx("sms:group_1"));
+    expect(sends("/api/v1/phone/numbers/pn_1/texts")[0]?.body).toEqual({ conversation_id: "group_1", text: "Hello everyone" });
   });
 
   it("replies to an email thread with Re: subject and In-Reply-To from replyRef", async () => {
@@ -178,6 +184,21 @@ describe("InkboxChannel routing", () => {
     await expect(ch.typing("imessage:conv_1")).rejects.toThrow();
     fail = false;
     await expect(ch.typing("imessage:conv_1")).resolves.toBeUndefined();
+  });
+
+  it("does not react to a message from a different conversation", async () => {
+    await expect(channel().react("imessage:other_conversation", "msg_1", "love")).rejects.toThrow(/current conversation/);
+    expect(sends("/api/v1/imessage/reactions")).toHaveLength(0);
+  });
+
+  it("encodes mailbox attachment names as a single path segment", async () => {
+    fake = fakeFetch({
+      ...sdkRoutes(),
+      "GET /api/v1/mail/mailboxes/maria-instinct%40inkbox.ai/messages/mail_1/attachments/photo%20%231%2Ffinal.png": { body: { url: "https://media.example.test/signed" } },
+    });
+    vi.stubGlobal("fetch", fake.fetchImpl);
+    expect(await channel().emailAttachment("mail_1", "photo #1/final.png")).toEqual({ url: "https://media.example.test/signed" });
+    expect(fake.calls.at(-1)?.query).toEqual({ redirect: "false" });
   });
 });
 

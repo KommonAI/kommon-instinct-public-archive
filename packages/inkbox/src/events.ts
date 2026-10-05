@@ -85,6 +85,7 @@ function parseIMessageReceived(payload: Dict, data: Dict): InboundMessage | unde
     meta: {
       ...contactsMeta(data),
       isGroup,
+      conversationScopeKnown: typeof message.is_group === "boolean",
       participants: strings(message.participants),
       service: str(message.service),
     },
@@ -113,6 +114,8 @@ function parseIMessageReaction(payload: Dict, data: Dict): InboundMessage | unde
     source: "webhook",
     meta: {
       ...contactsMeta(data),
+      // Reactions omit the conversation's membership; resolve it before admission.
+      conversationScopeKnown: false,
       reaction: { type, customEmoji: emoji, targetMessageId: target, reactionId: str(reaction.id) },
     },
   };
@@ -122,25 +125,26 @@ function parseTextReceived(payload: Dict, data: Dict): InboundMessage | undefine
   // The SDK types say `text_message`; older docs say `message`. Accept both.
   const message = dict(data.text_message) ?? dict(data.message);
   if (!message) return undefined;
-  const rawFrom = str(message.remote_phone_number) ?? str(message.remote_number) ?? str(message.sender_phone_number) ?? str(message.from);
+  const rawFrom = str(message.sender_phone_number) ?? str(message.remote_phone_number) ?? str(message.remote_number) ?? str(message.from);
   if (!rawFrom) return undefined;
   const from = normalizePhone(rawFrom) || rawFrom;
   const text = str(message.text) ?? str(message.content) ?? str(message.body) ?? "";
   const attachments = attachmentsFromMedia(message.media);
+  const conversationId = str(message.conversation_id) ?? str(message.conversation_key);
   const msg: InboundMessage = {
     id: eventId(payload, `sms:${str(message.id) ?? from}`),
     channel: "sms",
-    conversationKey: `sms:${from}`,
+    conversationKey: `sms:${conversationId ?? from}`,
     from,
     text: text || (attachments && attachments.length > 0 ? "[attachment]" : ""),
     replyRef: {
       textId: str(message.id),
-      conversationId: str(message.conversation_id) ?? str(message.conversation_key),
+      conversationId,
       localNumber: str(message.local_phone_number),
     },
     receivedAt: receivedAt(payload),
     source: "webhook",
-    meta: { ...contactsMeta(data), type: str(message.type) },
+    meta: { ...contactsMeta(data), type: str(message.type), conversationScopeKnown: false },
   };
   if (attachments && attachments.length > 0) msg.attachments = attachments;
   return msg;
@@ -177,7 +181,8 @@ function parseMailReceived(payload: Dict, data: Dict): InboundMessage | undefine
       to: strings(message.to_addresses),
       cc: strings(message.cc_addresses),
       hasAttachments: message.has_attachments === true,
-      bodyTruncated: message.body_truncated === true,
+      bodyTruncated: message.body_truncated === true || message.body_state === "truncated",
+      bodyUnavailable: !str(message.body) || message.body_state === "unavailable",
     },
   };
 }

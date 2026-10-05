@@ -29,6 +29,8 @@ export const HELP_GROUPS: HelpGroup[] = [
           "--agent-name \"Maria's Instinct\"",
           "--phone-number (also buy an SMS line)",
           "--skip-inkbox",
+          "--use-existing (explicitly import an existing Inkbox identity instead of choosing a free handle)",
+          "--rotate-signing-key (replace the identity's signing key; other receivers must use the new key)",
           "--apps / --no-apps (Composio apps; on by itself when COMPOSIO_API_KEY or COMPOSIO_TOOLKITS is in env)",
           "--toolkits gmail,googlecalendar,googlecontacts (also turns apps on)",
         ],

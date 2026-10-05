@@ -172,6 +172,7 @@ export class PolicyEngine {
   }
 
   private grantsFor(principal: Principal, at: Date): Grant[] {
+    if (principal.cappedFrom) return [];
     const ids = new Set<string>([principal.id]);
     if (principal.contactId) ids.add(`contact:${principal.contactId}`);
     return this.policy.grants.filter((g) => ids.has(g.to) && this.isActive(g, at));

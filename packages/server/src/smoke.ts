@@ -14,7 +14,7 @@ import { AuditLog, encodeEvent } from "@open-instinct/core";
 import type { OutboundMessage, Outbox, Principal } from "@open-instinct/core";
 import { encodeOip } from "@open-instinct/network";
 import { boot } from "./boot.js";
-import { createHttpServer } from "./http.js";
+import { closeInkboxInbox, createHttpServer } from "./http.js";
 
 const OWNER_PHONE = "+15550001111";
 const STRANGER_PHONE = "+15559998888";
@@ -198,7 +198,8 @@ async function main(): Promise<void> {
     check(reply !== undefined && /cannot share/i.test(reply.text), "the reply declines in words");
     check(a2aSends.length === 2, `nothing else left the process for this task (got ${a2aSends.length} sends)`);
     check(!a2aSends.some((s) => s.msg.text.includes("window seats")), "the owner's memory did not leak to the stranger or the notice");
-    const a2aAudit = new AuditLog(app.state).read().filter((e) => e.conversationKey === `a2a:${A2A_CONTEXT}`);
+    const taskKey = `a2a:${A2A_CONTEXT}:task:${A2A_TASK}:message:${a2aEvent.data.message_id}`;
+    const a2aAudit = new AuditLog(app.state).read().filter((e) => e.conversationKey === `a2a:${A2A_CONTEXT}` || e.conversationKey === taskKey);
     const inboundEntry = a2aAudit.find((e) => e.kind === "inbound");
     check(inboundEntry?.principal === `stranger:a2a:${STRANGER_AGENT}`, `the caller resolved to a stranger (got ${inboundEntry?.principal})`);
     const allowed = a2aAudit.filter((e) => e.kind === "policy" && (e.detail as { outcome?: string }).outcome === "allow").map((e) => (e.detail as { tool?: string }).tool);
@@ -236,6 +237,7 @@ async function main(): Promise<void> {
     check(status.json.agent === "Smoke" && status.json.model === "faux/faux-1", "status page names the agent and model");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeInkboxInbox(app);
     await app.close();
     rmSync(dataDir, { recursive: true, force: true });
   }

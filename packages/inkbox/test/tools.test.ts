@@ -82,6 +82,26 @@ describe("send_message", () => {
     expect(JSON.stringify(r)).toContain("imessage");
   });
 
+  it("uses the delivery conversation and reply reference instead of the internal session key", async () => {
+    await tool("send_message").execute({ text: "Hi everyone" }, {
+      ...ctxFor(owner, "imessage:group_1:owner"), deliveryKey: "imessage:group_1",
+    });
+    expect(sent[0]?.msg.conversationKey).toBe("imessage:group_1");
+    const replyRef = { from: "sam@example.com", subject: "Plans", messageId: "<original@example.com>" };
+    await tool("send_message").execute({ text: "Thursday works" }, {
+      ...ctxFor(owner, "email:thread_1"), deliveryKey: "email:thread_1", replyRef,
+    });
+    expect(sent[1]?.msg.replyRef).toEqual(replyRef);
+  });
+
+  it("uses the wire conversation for typing and reactions in group sessions", async () => {
+    const ctx = { ...ctxFor(owner, "imessage:group_1:owner"), deliveryKey: "imessage:group_1" };
+    await tool("send_typing").execute({}, ctx);
+    await tool("react").execute({ messageId: "message_1", reaction: "like" }, ctx);
+    expect(channel.typing).toHaveBeenCalledWith("imessage:group_1");
+    expect(channel.react).toHaveBeenCalledWith("imessage:group_1", "message_1", "like");
+  });
+
   it("lets the owner message a contact, a number, or an email with a subject", async () => {
     const t = tool("send_message");
     await t.execute({ to: "sam-lee", text: "Dinner Thursday?" }, ctxFor(owner, "chat:cli"));

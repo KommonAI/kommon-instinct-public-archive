@@ -112,11 +112,17 @@ export async function relayEvent(user: UserRecord, rawBody: Buffer, headers: Hea
     return { status: "rejected", reason: "invalid json" };
   }
 
+  return relayVerifiedEvent(user, payload, deps);
+}
+
+/** Replay an event whose signature was verified before durable admission. */
+export async function relayVerifiedEvent(user: UserRecord, payload: Json, deps: RelayDeps): Promise<RelayResult> {
+  const log = deps.logger ?? silentLogger;
   const eventType = typeof payload["event_type"] === "string" ? payload["event_type"] : "";
   if (isDeliveryEvent(eventType)) return { status: "ignored", reason: `delivery event ${eventType}` };
 
   const dedupe = deps.dedupe ?? defaultDeduper;
-  const eventId = typeof payload["id"] === "string" ? payload["id"] : undefined;
+  const eventId = typeof payload["id"] === "string" ? `${user.id}:${payload["id"]}` : undefined;
   if (eventId && dedupe.seen(eventId)) return { status: "ignored", reason: "duplicate" };
 
   if (!user.maritimeAgentId) {

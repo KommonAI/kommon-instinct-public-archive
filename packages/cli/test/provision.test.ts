@@ -20,8 +20,9 @@ function fakeProvisioner(opts: { takenHandles?: string[] } = {}) {
       calls.push({ method: "mintIdentityKey", args: [identityId, label] });
       return "ik_minted";
     },
-    async createSigningKey(handle) {
-      calls.push({ method: "createSigningKey", args: [handle] });
+    async createSigningKey() { throw new Error("Use ensureSigningKey"); },
+    async ensureSigningKey(handle, options) {
+      calls.push({ method: "ensureSigningKey", args: [handle, options] });
       return "whsec_signing";
     },
     async routerInfo() {
@@ -54,7 +55,7 @@ describe("init with INKBOX_ADMIN_API_KEY", () => {
     expect(r.code, r.err).toBe(0);
     expect(fake.factoryOpts[0]).toEqual({ apiKey: "ak_admin", baseUrl: undefined });
     const methods = fake.calls.map((c) => c.method);
-    expect(methods).toEqual(["provisionIdentity", "mintIdentityKey", "createSigningKey", "routerInfo"]);
+    expect(methods).toEqual(["provisionIdentity", "mintIdentityKey", "ensureSigningKey", "routerInfo"]);
     const input = fake.calls[0]!.args[0] as { handle: string; imessage: boolean; phone: boolean };
     expect(input.handle).toBe("maria-instinct");
     expect(input.imessage).toBe(true);
@@ -88,6 +89,45 @@ describe("init with INKBOX_ADMIN_API_KEY", () => {
     expect(r.code, r.err).toBe(0);
     expect(r.out).toContain("already provisioned");
     expect(fake.calls.slice(before).map((c) => c.method)).toEqual(["routerInfo"]);
+  });
+
+  it("imports an existing identity only when explicitly requested", async () => {
+    const fresh = fakeProvisioner();
+    await run(initArgs, { INSTINCT_DATA_DIR: tmpDir(), INKBOX_ADMIN_API_KEY: "ak" }, { createProvisioner: () => fresh.p });
+    expect(fresh.calls[0]!.args[0]).toMatchObject({ reuseExisting: false });
+    const imported = fakeProvisioner();
+    await run([...initArgs, "--use-existing"], { INSTINCT_DATA_DIR: tmpDir(), INKBOX_ADMIN_API_KEY: "ak", INKBOX_SIGNING_KEY: "whsec_supplied" }, { createProvisioner: () => imported.p });
+    expect(imported.calls[0]!.args[0]).toMatchObject({ reuseExisting: true });
+    expect(imported.calls.find((call) => call.method === "ensureSigningKey")?.args[1]).toMatchObject({ knownSigningKey: "whsec_supplied", rotate: false });
+  });
+
+  it("rotates an existing profile's signing key only with the explicit flag", async () => {
+    const dir = tmpDir();
+    const fake = fakeProvisioner();
+    const env = { INSTINCT_DATA_DIR: dir, INKBOX_ADMIN_API_KEY: "ak" };
+    await run(initArgs, env, { createProvisioner: () => fake.p });
+    fake.calls.length = 0;
+    const result = await run([...initArgs, "--rotate-signing-key"], env, { createProvisioner: () => fake.p });
+    expect(result.code, result.err).toBe(0);
+    expect(fake.calls.map((call) => call.method)).toEqual(["provisionIdentity", "ensureSigningKey", "routerInfo"]);
+    expect(fake.calls[0]!.args[0]).toMatchObject({ reuseExisting: true });
+    expect(fake.calls[1]!.args[1]).toMatchObject({ knownSigningKey: "whsec_signing", rotate: true });
+  });
+
+  it("resumes the saved identity after signing setup fails", async () => {
+    const dir = tmpDir();
+    const fake = fakeProvisioner();
+    const env = { INSTINCT_DATA_DIR: dir, INKBOX_ADMIN_API_KEY: "ak" };
+    const ensure = fake.p.ensureSigningKey;
+    fake.p.ensureSigningKey = async () => { throw new Error("Signing setup unavailable"); };
+    expect((await run(initArgs, env, { createProvisioner: () => fake.p })).code).toBe(1);
+    expect(readSecrets(dir)).toMatchObject({ identityId: "idn_1", apiKey: "ik_minted" });
+    fake.p.ensureSigningKey = ensure;
+    fake.calls.length = 0;
+    const result = await run(initArgs, env, { createProvisioner: () => fake.p });
+    expect(result.code, result.err).toBe(0);
+    expect(fake.calls[0]!.args[0]).toMatchObject({ reuseExisting: true });
+    expect(fake.calls.some((call) => call.method === "mintIdentityKey")).toBe(false);
   });
 
   it("refuses to provision without a handle", async () => {

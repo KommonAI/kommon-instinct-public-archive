@@ -28,7 +28,7 @@ describe("InkboxProvisioner.provisionIdentity", () => {
       "GET /api/v1/identities/maria-instinct": { body: rawIdentity({ imessage_enabled: false }) },
       "PATCH /api/v1/identities/maria-instinct": { body: rawIdentity({ imessage_enabled: true }) },
     });
-    const out = await provisioner(fake).provisionIdentity({ handle: "maria-instinct", displayName: "x" });
+    const out = await provisioner(fake).provisionIdentity({ handle: "maria-instinct", displayName: "x", reuseExisting: true });
     expect(out.imessageEnabled).toBe(true);
     expect(out.phone).toBe("+16505550123");
     expect(fake.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/v1/identities/maria-instinct", "PATCH /api/v1/identities/maria-instinct"]);
@@ -37,7 +37,7 @@ describe("InkboxProvisioner.provisionIdentity", () => {
 
   it("does not patch an existing identity that already has what we want", async () => {
     const fake = fakeFetch({ "GET /api/v1/identities/maria-instinct": { body: rawIdentity() } });
-    await provisioner(fake).provisionIdentity({ handle: "maria-instinct", displayName: "x" });
+    await provisioner(fake).provisionIdentity({ handle: "maria-instinct", displayName: "x", reuseExisting: true });
     expect(fake.calls).toHaveLength(1);
   });
 
@@ -83,8 +83,23 @@ describe("InkboxProvisioner.provisionIdentity", () => {
     expect((posts[1]?.body as { phone_number?: unknown }).phone_number).toBeUndefined();
   });
 
+  it("creates a fresh identity when the requested handle is already readable", async () => {
+    const fake = fakeFetch({
+      "GET /api/v1/identities/sam-instinct": { body: rawIdentity({ id: "existing_identity", agent_handle: "sam-instinct" }) },
+      "POST /api/v1/identities/": (req: Recorded) => {
+        const handle = (req.body as { agent_handle: string }).agent_handle;
+        return handle === "sam-instinct"
+          ? { status: 409 }
+          : { body: rawIdentity({ id: "new_identity", agent_handle: handle }) };
+      },
+    });
+    const identity = await provisioner(fake).provisionIdentity({ handle: "sam-instinct", displayName: "New user" });
+    expect(identity).toMatchObject({ identityId: "new_identity", handle: "sam-instinct-2" });
+    expect(fake.calls.every((call) => call.method === "POST")).toBe(true);
+  });
+
   it("surfaces other HTTP errors", async () => {
-    const fake = fakeFetch({ "GET /api/v1/identities/sam-instinct": { status: 500, body: { detail: "db down" } } });
+    const fake = fakeFetch({ "POST /api/v1/identities/": { status: 500, body: { detail: "db down" } } });
     await expect(provisioner(fake).provisionIdentity({ handle: "sam-instinct", displayName: "x" })).rejects.toBeInstanceOf(InkboxHttpError);
   });
 });
@@ -99,6 +114,32 @@ describe("InkboxProvisioner: keys, webhooks, router, A2A", () => {
   it("creates a signing key", async () => {
     const fake = fakeFetch({ "POST /api/v1/identities/maria-instinct/signing-key": { body: { signing_key: "whsec_abc", created_at: "2026-10-03T00:00:00Z" } } });
     expect(await provisioner(fake).createSigningKey("maria-instinct")).toBe("whsec_abc");
+  });
+
+  it("does not rotate a configured signing key when its value is unavailable", async () => {
+    const fake = fakeFetch({
+      "GET /api/v1/identities/maria-instinct/signing-key": { body: { configured: true } },
+    });
+    await expect(provisioner(fake).ensureSigningKey("maria-instinct")).rejects.toThrow("--rotate-signing-key");
+    expect(fake.calls.map((call) => call.method)).toEqual(["GET"]);
+  });
+
+  it("reuses a known signing key and rotates only when requested", async () => {
+    const fake = fakeFetch({
+      "GET /api/v1/identities/maria-instinct/signing-key": { body: { configured: true } },
+      "POST /api/v1/identities/maria-instinct/signing-key": { body: { signing_key: "whsec_rotated" } },
+    });
+    expect(await provisioner(fake).ensureSigningKey("maria-instinct", { knownSigningKey: "whsec_saved" })).toBe("whsec_saved");
+    expect(fake.calls.map((call) => call.method)).toEqual(["GET"]);
+    expect(await provisioner(fake).ensureSigningKey("maria-instinct", { rotate: true })).toBe("whsec_rotated");
+  });
+
+  it("creates an initial signing key when none is configured", async () => {
+    const fake = fakeFetch({
+      "GET /api/v1/identities/maria-instinct/signing-key": { body: { configured: false } },
+      "POST /api/v1/identities/maria-instinct/signing-key": { body: { signing_key: "whsec_first" } },
+    });
+    expect(await provisioner(fake).ensureSigningKey("maria-instinct")).toBe("whsec_first");
   });
 
   it("subscribes webhooks with the default event list and returns the one-time signing key", async () => {
@@ -126,6 +167,7 @@ describe("InkboxProvisioner: keys, webhooks, router, A2A", () => {
     const fake = fakeFetch({
       "PUT /api/v1/identities/maria-instinct/a2a/settings": { body: { enabled: true } },
       "POST /api/v1/identities/maria-instinct/a2a/contact-rules": { status: 409, body: { detail: { code: "duplicate_contact_rule", existing_rule_id: "r1" } } },
+      "GET /api/v1/identities/maria-instinct/a2a/contact-rules": { body: [{ action: "allow", match_type: "handle", match_target: "sam-instinct", direction: "both" }] },
     });
     const p = provisioner(fake);
     await p.enableA2A("maria-instinct");
@@ -134,6 +176,17 @@ describe("InkboxProvisioner: keys, webhooks, router, A2A", () => {
     // Same wire shape as the SDK's A2AResource.addContactRule; `handle` is not a wire field.
     expect(fake.calls[1]?.body).toEqual({ action: "allow", match_type: "handle", match_target: "sam-instinct", direction: "both" });
     expect(fake.calls[1]?.body).not.toHaveProperty("handle");
+  });
+
+  it.each(["block", "missing"])("does not report a %s contact-rule conflict as allowed", async (action) => {
+    const fake = fakeFetch({
+      "POST /api/v1/identities/maria-instinct/a2a/contact-rules": { status: 409 },
+      "GET /api/v1/identities/maria-instinct/a2a/contact-rules": {
+        body: action === "missing" ? [] : [{ action, match_type: "handle", match_target: "sam-instinct", direction: "both" }],
+      },
+    });
+    await expect(provisioner(fake).addContactRule("maria-instinct", "sam-instinct")).rejects.toThrow("does not allow");
+    expect(fake.calls.map((call) => call.method)).toEqual(["POST", "GET"]);
   });
 
   it("creates an invitation and deletes identities idempotently", async () => {

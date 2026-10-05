@@ -131,7 +131,7 @@ describe("parseInkboxEvent: text.received", () => {
     )!;
     expect(m.channel).toBe("sms");
     expect(m.from).toBe("+14155550100");
-    expect(m.conversationKey).toBe("sms:+14155550100");
+    expect(m.conversationKey).toBe("sms:tc_1");
     expect(m.text).toBe("running late");
     expect(m.replyRef).toMatchObject({ textId: "t_1", conversationId: "tc_1", localNumber: "+16505550000" });
   });

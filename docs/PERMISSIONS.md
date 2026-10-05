@@ -22,6 +22,13 @@ door. Family has the guest room. Friends can ring the bell. Strangers can leave 
 A person is placed in a tier by the owner ("Sam is my partner", "put Alex at friend") or by
 accepting an invitation that names a tier. Agents inherit the tier of the person they act for.
 
+In shared message threads, every sender is limited to the least-trusted audience member.
+Personal grants do not expand what may be shared with that audience. If membership cannot
+be resolved, the message is not processed until its conversation scope is available.
+Delegated results retain the original audience cap and later reductions observed in the
+requester's trust tier or local conversation. Membership is not fetched again solely for
+delivery of the remote result.
+
 ## Capabilities
 
 Each tool call is tagged with the capabilities it needs. The guard allows a call when the
