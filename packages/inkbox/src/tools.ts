@@ -123,14 +123,15 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
       if (!text) return { content: [{ type: "text", text: "Nothing to send: text is empty." }], isError: true };
 
       if (!args.to) {
-        const key = parseConversationKey(ctx.conversationKey);
+        const deliveryKey = ctx.deliveryKey ?? ctx.conversationKey;
+        const key = parseConversationKey(deliveryKey);
         if (key.channel === "a2a") {
           throw new Error("This is an agent-to-agent conversation. Use reply_instinct to answer the other agent.");
         }
         if (key.channel !== "imessage" && key.channel !== "sms" && key.channel !== "email") {
           throw new Error(`Cannot reply on "${ctx.conversationKey}". Give \`to\` to pick a recipient.`);
         }
-        const msg: OutboundMessage = { channel: key.channel, conversationKey: ctx.conversationKey, text };
+        const msg: OutboundMessage = { channel: key.channel, conversationKey: deliveryKey, text, ...(ctx.replyRef ? { replyRef: ctx.replyRef } : {}) };
         await deps.channel.send(msg, { principal: ctx.principal, conversationKey: ctx.conversationKey });
         return textResult(`Sent in the current ${key.channel} conversation.`);
       }
@@ -163,7 +164,7 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
     parameters: Type.Object({}),
     meta: { capabilities: ["converse"], group: "messaging", describe: () => "send_typing" },
     execute: async (_args, ctx) => {
-      await deps.channel.typing(ctx.conversationKey);
+      await deps.channel.typing(ctx.deliveryKey ?? ctx.conversationKey);
       return textResult("ok");
     },
   });
@@ -182,7 +183,7 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
       },
     },
     execute: async (args, ctx) => {
-      await deps.channel.react(ctx.conversationKey, args.messageId, args.reaction);
+      await deps.channel.react(ctx.deliveryKey ?? ctx.conversationKey, args.messageId, args.reaction);
       return textResult(`Reacted ${args.reaction}.`);
     },
   });

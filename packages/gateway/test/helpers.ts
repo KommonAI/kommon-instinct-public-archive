@@ -56,7 +56,7 @@ export function imessageEvent(id = "evt_1", conversationId = "conv_9"): Record<s
 export interface FakeInkbox {
   calls: string[];
   provisioner: InkboxProvisioner;
-  fail: Partial<Record<"provisionIdentity" | "mintIdentityKey" | "createSigningKey" | "subscribeWebhooks", number>>;
+  fail: Partial<Record<"provisionIdentity" | "mintIdentityKey" | "ensureSigningKey" | "subscribeWebhooks", number>>;
 }
 
 /** A provisioner whose methods record their order and can be told to fail n times. */
@@ -81,9 +81,9 @@ export function fakeInkbox(opts: { subscriptionSigningKey?: string } = {}): Fake
       maybeFail("mintIdentityKey");
       return `ik_${identityId}`;
     },
-    async createSigningKey(handle: string) {
-      calls.push("createSigningKey");
-      maybeFail("createSigningKey");
+    async ensureSigningKey(handle: string) {
+      calls.push("ensureSigningKey");
+      maybeFail("ensureSigningKey");
       return `whsec_${handle}`;
     },
     async subscribeWebhooks(identityId: string, url: string) {

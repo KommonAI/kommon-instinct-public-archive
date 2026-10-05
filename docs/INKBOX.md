@@ -44,6 +44,12 @@ One Inkbox identity is one agent. When `instinct init` runs with an admin key, i
 
 The handle is the thing people and other agents type. It appears in `connect @maria-instinct`, in A2A URLs, and in contact rules. Pick it once. If it is taken, Inkbox returns a 409 and `init` tries `maria-instinct-2`, up to `-5`.
 
+Initialization creates a new identity by default, even when another identity in the org
+already has the requested handle. To intentionally import an existing identity, use
+`instinct init --handle <handle> --use-existing`. An identity already recorded in this
+data directory's secrets can be resumed without that flag. Gateway signup always creates
+a new identity for its user.
+
 The agent is one identity. You, the owner, are not an Inkbox identity. You are a phone number and an email address in `config.json`. The agent recognises you by those.
 
 ## Two kinds of API key
@@ -107,7 +113,12 @@ A dedicated line is an iMessage-enabled phone number that belongs to one identit
 
 How you get one: `POST /imessage/numbers` with an `Idempotency-Key` header, or `claim_imessage_number: true` when creating the identity. `PATCH /identities/{handle}` with `imessage_number_id` attaches or swaps a line; `null` returns to the shared service.
 
-Open Instinct's provisioner does not claim a dedicated line. `init` creates a shared-line identity. If you claim a line in the Inkbox console, the agent uses it without a code change: the `InkboxChannel` sends with `to` when a message has a phone number and no conversation key, which only works on a dedicated line. Group iMessage and companion mode (adding your agent to someone else's group chat) both need one.
+Open Instinct's provisioner does not claim a dedicated line. `init` creates a shared-line identity.
+`InkboxChannel` can address an existing shared-service connection with either its
+`conversationId` or its recipient's phone number in `to`. Sending by `to` does **not**
+itself require a dedicated line. Initiating contact with an unconnected recipient requires
+a suitable dedicated line and remains subject to the service's sending limits. Groups
+also require a suitable line; group replies use their existing conversation ID.
 
 ## Webhooks and signing keys
 
@@ -142,24 +153,67 @@ Who subscribes, and to what URL:
 | Gateway (many users) | the gateway at signup | `<GATEWAY_PUBLIC_URL>/webhooks/inkbox/<userId>` |
 | By hand | you, in the console or with the API | whatever public URL reaches the server |
 
-Subscribing is idempotent in Open Instinct: an existing subscription for the same URL is reused. An identity may hold up to 60 active subscriptions. Deliveries are at least once, so the runtime drops a webhook whose `id` it has already seen.
+Subscription setup checks existing subscriptions for the identity and URL. It reuses them
+when their combined event lists cover all required events; otherwise it adds missing
+events to an existing subscription without dropping its other events. An identity may
+hold up to 60 active subscriptions.
+
+Deliveries are at least once. The gateway and agent persist webhook receipts before
+acknowledging them, deduplicate by event ID, and retry queued work after temporary
+failures or a restart. Gateway forwarding can be replayed with the same event ID because
+the receiving agent deduplicates it. An admitted model turn interrupted with an uncertain
+outcome is recorded as `uncertain` rather than executed again automatically. The agent's `/status` includes
+receipt counts. Keep the receipt files with the rest of the persistent data directory;
+each store is owned by one process.
+
+### Conversation and content hydration
+
+The synchronous parser normalizes events; the server then completes missing information
+before running the agent:
+
+- **SMS and iMessage reactions:** retrieve conversation membership. If membership cannot
+  be resolved, retry the event instead of assuming it is a private conversation. SMS is
+  keyed and replied to by conversation ID, including groups.
+- **Group messages:** preserve the wire conversation separately from each participant's
+  internal session. Permissions are limited to the group's audience, and group activity
+  does not select a private owner-notification destination.
+- **Email:** fetch the complete body when the webhook contains only a prefix or no body,
+  and retrieve attachment URLs. Email tools carry the inbound sender and reply headers.
+- **Attachments:** save inbound email/iMessage/MMS files under `workspace/inbound` with
+  generated filenames. At most 10 files are included per event, with a default 10 MiB
+  download limit per file. A failed download produces an explicit note and retains the
+  full URL. Signed URLs are never shortened for display.
+
+These lookups use the identity-scoped key. Downloading an attachment does not forward
+that key to the file URL. Embedders using the adapter directly should run
+`InkboxInboundHydrator.hydrate()` after parsing and before runtime admission.
 
 ### Signing keys
 
 Every identity should have a signing key. Until it does, Inkbox sends its webhooks unsigned, and the Open Instinct server answers 503 to any webhook it cannot verify.
 
-The key is created with `POST /identities/{handle}/signing-key`. It is shown once. `instinct init` creates it and stores it in `secrets/inkbox.json`. The first subscription on a keyless identity also returns one, and the server stores that in `secrets/webhook.json`. Either way the server gets it through `INKBOX_SIGNING_KEY` or from those files.
+The key is created with `POST /identities/{handle}/signing-key` and shown once.
+Initialization and subscription setup first check whether the identity already has one.
+They reuse a known key from `INKBOX_SIGNING_KEY` or the identity's saved secrets; if an
+existing key is unknown, setup stops with instructions instead of replacing it. A newly
+created key is saved before later provisioning requests. The CLI uses
+`secrets/inkbox.json`; server webhook setup also records `secrets/webhook.json`.
 
 How a webhook is checked:
 
 1. Read the headers `X-Inkbox-Request-ID`, `X-Inkbox-Timestamp` (unix seconds) and `X-Inkbox-Signature` (`sha256=<hex>`).
 2. Reject a timestamp more than 300 seconds from now.
 3. Compute HMAC-SHA256 over the string `{request_id}.{timestamp}.{raw body}` with the signing key. The `whsec_` prefix is stripped first.
-4. Compare in constant time. A mismatch is 401. A match is 204 at once, and the event is handled in the background.
+4. Compare in constant time. A mismatch is 401. A valid event is acknowledged only after
+   its receipt is persisted, then handled in the background.
 
 The gateway and the server use the same `verifyInkboxSignature` function from `@open-instinct/inkbox`. Nothing reads a webhook body before the signature passes.
 
-To rotate: call the signing-key route again, update `INKBOX_SIGNING_KEY` or the secrets file, restart. Webhooks signed with the old key fail until then, which is the point.
+To intentionally rotate during initialization, run `instinct init --rotate-signing-key`.
+If importing an identity not recorded locally, include `--use-existing`. Coordinate the
+new key with every receiver subscribed to that identity; receivers using the old key
+will stop accepting its webhooks. The adapter also exposes explicit `{ rotate: true }`
+on `ensureSigningKey` for integrations managing their own setup.
 
 ## Contact rules and whitelist mode
 
@@ -201,6 +255,15 @@ The two gates compared:
 ## A2A invitations and how our tiers sit on top
 
 A2A is how one Open Instinct talks to another. Every identity speaks A2A 1.0 JSON-RPC at `https://inkbox.ai/a2a/{handle}`. Inkbox stores the task, posts `a2a.task.created` to the worker, and relays each reply back to the caller as `a2a.sent_task.updated`.
+
+Open Instinct persists each outgoing task's originating conversation, so a peer's answer
+returns to the person who asked. A peer's request for clarification can be continued with
+`ask_instinct` using that task's `taskId`; reusing only `contextId` groups a topic but starts
+a separate task. Worker-side `reply_instinct` takes its task from the current conversation,
+not a model-supplied task ID. Separate tasks are isolated, and cancellation/terminal state
+prevents further tools or delayed approvals from resuming a finished task.
+Nested delegation from an inbound A2A task is not supported: workers use
+`reply_instinct` with `ask_caller` when they need more information.
 
 Two identities in different orgs may talk only when both sides allow it. There are two ways to get there:
 
@@ -250,6 +313,10 @@ How the limits show up in Open Instinct:
 | Rate limits on sends | 429 with `Retry-After`. The channel retries up to two more times when the wait is 5 seconds or less. A 429 with no `Retry-After` is a quota and is reported to the model with the wait time |
 | Unique recipients | a hard cap on how many humans one org's agents can text. For a gateway deployment this bounds how many users you can serve on one plan |
 
+The adapter's own REST helper retries reads and explicitly replay-safe A2A `SendMessage`
+requests with stable message IDs. It does not automatically retry provisioning mutations
+or worker-reply POSTs. SDK-backed message sends use the SDK's idempotency/retry handling.
+
 A single self-hosted agent for one person fits the Free plan: one identity, one recipient (you), a few hundred messages a month.
 
 ## Agent self-signup, for people without an org
@@ -284,19 +351,21 @@ Each of these is read by the server, the CLI or the gateway. Nothing else in the
 | `INKBOX_AGENT_HANDLE` | same | the server, `dev --tunnel` | the agent's handle. Needed with `INKBOX_API_KEY` for the outbox to become Inkbox |
 | `INKBOX_IDENTITY_ID` | same | the server | the identity's UUID. Saves one lookup when subscribing webhooks |
 | `INKBOX_SIGNING_KEY` | same, or by hand | the server, the gateway | webhook verification. Also read from `secrets/webhook.json` |
-| `INKBOX_BASE_URL` | you | CLI, server | API base, only for a self-hosted Inkbox. Default `https://inkbox.ai` |
+| `INKBOX_BASE_URL` | you | CLI, server, gateway | Inkbox API origin used consistently for provisioning, identity, messaging, hydration and A2A. Default `https://inkbox.ai` |
 | `INSTINCT_TUNNEL` | `dev --tunnel`, or you in `deploy/.env` | the server | `1` opens the tunnel to a webhook-only listener |
 
 Without `INKBOX_API_KEY` and `INKBOX_AGENT_HANDLE` the agent still boots. Replies go to a console outbox and are printed. That is how local development without a phone works.
 
 ## What the code does with all this
 
-The `@open-instinct/inkbox` package wraps the pieces above into four parts. The [package README](../packages/inkbox/README.md) has the API.
+The `@open-instinct/inkbox` package wraps the pieces above. The [package README](../packages/inkbox/README.md) has the API.
 
 | Part | Inkbox feature it uses | Called from |
 |---|---|---|
 | `InkboxProvisioner` | identities, API keys, signing keys, subscriptions, router info, A2A settings, contact rules, invitations | `instinct init`, `connect`, `invite`; the gateway at signup; the server when it subscribes its own webhook |
 | `verifyInkboxSignature` and `parseInkboxEvent` | signed webhooks, the event catalog | the server's `POST /webhooks/inkbox`; the gateway's `POST /webhooks/inkbox/:userId` |
+| `DurableInbox` | persistent local admission and retries for received events | gateway and agent webhook listeners |
+| `InkboxInboundHydrator` | conversation membership, full mail bodies, attachment retrieval | the server before runtime admission |
 | `InkboxChannel` | iMessage, SMS and email sends, typing, tapbacks, read receipts | the runtime's outbox |
 | `InkboxA2A` | A2A send and reply | the network tools `ask_instinct` and `reply_instinct` |
 
@@ -307,5 +376,9 @@ Where things end up on disk, so you know what to back up:
 | `<dataDir>/secrets/inkbox.json` | handle, identity id, identity key, signing key, email, phone, tunnel host. Mode 0600 |
 | `<dataDir>/secrets/webhook.json` | subscription id, URL, signing key. Mode 0600 |
 | `<dataDir>/contacts.json` | each contact's `agentHandle`, which is how an A2A caller maps to a tier |
+| `<dataDir>/inkbox-inbox.json` | the agent's queued, completed and uncertain webhook receipts |
+| `<gatewayDataDir>/webhook-inbox.json` | queued gateway relay receipts |
+| `<dataDir>/a2a-delegations.json`, `a2a-tasks.json` | original reply routes and A2A task lifecycle state |
+| `<dataDir>/workspace/inbound/` | downloaded email/iMessage/MMS attachments |
 
 Related reading: [SELF-HOST.md](SELF-HOST.md) for running the agent and the tunnel on your own machine; [ARCHITECTURE.md](ARCHITECTURE.md) for the full message flow; the [gateway README](../packages/gateway/README.md) for the many-user shape.

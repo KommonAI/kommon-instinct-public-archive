@@ -58,15 +58,28 @@ describe("createRest", () => {
   it("retries a 429 with Retry-After: 1 once and returns the eventual body", async () => {
     let n = 0;
     const fake = fakeFetch({
-      "POST /api/v1/identities/maria-instinct/a2a/tasks/t1/reply": () => (++n === 1 ? { status: 429, body: { detail: "slow down" }, headers: { "Retry-After": "1" } } : { body: { id: "t1", state: "completed" } }),
+      "GET /api/v1/identities/maria-instinct/a2a/tasks/t1": () => (++n === 1 ? { status: 429, body: { detail: "slow down" }, headers: { "Retry-After": "1" } } : { body: { id: "t1", state: "completed" } }),
     });
     const sleeps: number[] = [];
-    const out = await rest(fake, sleeps).request<{ state: string }>("POST", "/identities/maria-instinct/a2a/tasks/t1/reply", { intent: "complete", parts: [] });
+    const out = await rest(fake, sleeps).request<{ state: string }>("GET", "/identities/maria-instinct/a2a/tasks/t1");
     expect(out.state).toBe("completed");
     expect(fake.calls).toHaveLength(2);
     expect(sleeps).toEqual([1000]);
-    // The body is resent unchanged.
-    expect(fake.calls[1]?.body).toEqual({ intent: "complete", parts: [] });
+  });
+
+  it.each([429, 502, 503, 504])("does not replay an unkeyed mutation after HTTP %s", async (status) => {
+    const fake = fakeFetch({ "POST /api/v1/identities/x/a2a/tasks/t/reply": { status, headers: { "Retry-After": "1" } } });
+    await expect(rest(fake).request("POST", "/identities/x/a2a/tasks/t/reply", { intent: "progress", parts: [{ text: "working" }] })).rejects.toMatchObject({ status });
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  it("retries an explicitly replay-safe request with the same message ID", async () => {
+    let calls = 0;
+    const fake = fakeFetch({ "POST /a2a/peer": () => ++calls === 1 ? { status: 503 } : { body: { result: {} } } });
+    const body = { params: { message: { messageId: "stable-message" } } };
+    await rest(fake).requestUrl("POST", `${BASE}/a2a/peer`, body, {}, { replaySafe: true });
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls.map((c) => c.body)).toEqual([body, body]);
   });
 
   it("gives up on a long Retry-After and exposes it on the error", async () => {

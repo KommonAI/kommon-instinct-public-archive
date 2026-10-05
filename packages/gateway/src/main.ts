@@ -108,6 +108,7 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
     store,
     publicUrl: cfg.publicUrl,
     inkbox,
+    inkboxBaseUrl: cfg.inkboxBaseUrl,
     maritime: {
       apiKey: cfg.maritimeApiKey,
       baseUrl: cfg.maritimeBaseUrl,
@@ -130,7 +131,14 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
     log.info("gateway.listening", { port: cfg.port, publicUrl: cfg.publicUrl, users: store.all().length, signup: Boolean(inkbox), link: Boolean(cfg.link) });
     server.resumePending();
   });
-  const stop = () => server.close(() => process.exit(0));
+  let stopping = false;
+  const stop = () => {
+    if (stopping) return;
+    stopping = true;
+    const deadline = setTimeout(() => process.exit(0), 10_000);
+    deadline.unref();
+    server.close(() => { void server.drainWebhooks().finally(() => process.exit(0)); });
+  };
   process.once("SIGTERM", stop);
   process.once("SIGINT", stop);
   return server;

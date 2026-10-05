@@ -14,8 +14,8 @@
 import http from "node:http";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { decodeEvent } from "@open-instinct/core";
-import type { AgentRuntime, HandleResult, InboundMessage, InstinctConfig, OutboundMessage, ScheduleEntry, Scheduler } from "@open-instinct/core";
-import { parseInkboxEvent, verifyInkboxSignature } from "@open-instinct/inkbox";
+import type { AgentRuntime, HandleResult, InboundMessage, InstinctConfig, OutboundMessage, ScheduleEntry, Scheduler, StateDir } from "@open-instinct/core";
+import { DurableInbox, parseInkboxEvent, verifyInkboxSignature } from "@open-instinct/inkbox";
 
 /** Replies the console outbox is holding for a chat conversation. */
 export interface ChatBuffer {
@@ -33,6 +33,8 @@ export interface WalletCallback {
 
 /** The slice of a boot() result the HTTP layer needs. Tests pass stubs. */
 export interface HttpApp {
+  state?: StateDir;
+  hydrateInbound?(msg: InboundMessage): Promise<InboundMessage>;
   runtime: Pick<AgentRuntime, "handleInbound" | "stats"> & Partial<Pick<AgentRuntime, "runScheduled">>;
   scheduler: Pick<Scheduler, "toMaritimeSchedules"> & Partial<Pick<Scheduler, "list" | "markRan">>;
   config: InstinctConfig;
@@ -75,6 +77,33 @@ export const TUNNEL_ROUTES: ReadonlySet<string> = new Set(["GET /health", "POST 
 export const SCHEDULE_WAKE_GRACE_MS = 90_000;
 /** Envelope event type the gateway relays when Link redirects to its callback URL. */
 export const LINK_CALLBACK_EVENT = "link.oauth_callback";
+
+const inboxes = new WeakMap<HttpApp, { queue: DurableInbox<InboundMessage>; listeners: number; closing?: Promise<void> }>();
+
+/** Wait for admitted work before closing the agent's tool clients. */
+export async function closeInkboxInbox(app: HttpApp): Promise<void> {
+  const inbox = inboxes.get(app);
+  if (!inbox) return;
+  inbox.closing ??= inbox.queue.close().finally(() => {
+    if (inboxes.get(app) === inbox) inboxes.delete(app);
+  });
+  await inbox.closing;
+}
+
+async function processInbound(app: HttpApp, msg: InboundMessage): Promise<HandleResult> {
+  const hydrated = app.hydrateInbound ? await app.hydrateInbound(msg) : msg;
+  return app.runtime.handleInbound(hydrated, { waitForCompletion: true });
+}
+
+async function acceptInbound(app: HttpApp, msg: InboundMessage): Promise<ChatResponse> {
+  const inbox = inboxes.get(app);
+  if (inbox) {
+    const fresh = inbox.queue.enqueue(msg.id, msg);
+    return { response: "", acked: true, conversationKey: msg.conversationKey, ...(fresh ? {} : { blocked: "duplicate" }) };
+  }
+  // Embedders without persistent state must finish handling before acknowledging.
+  return summarize(await processInbound(app, msg), true);
+}
 
 export interface ChatRequest {
   message: string;
@@ -150,8 +179,7 @@ export async function handleChat(app: HttpApp, body: ChatRequest, now: Date = ne
       inbound.source ??= body.source;
       inbound.meta = { ...inbound.meta, relaySource: body.source };
     }
-    const result = await app.runtime.handleInbound(inbound);
-    return summarize(result, true);
+    return acceptInbound(app, inbound);
   }
   if (body.source === "scheduled") return handleScheduledWake(app, body, now);
   const msg = ownerChatMessage(body, now);
@@ -238,6 +266,19 @@ export function createHttpServer(app: HttpApp, opts: HttpServerOptions = {}): ht
   const signingKey = (): string | undefined => opts.signingKey ?? opts.signingKeyProvider?.() ?? env.INKBOX_SIGNING_KEY;
   const chatToken = opts.chatToken ?? env.INSTINCT_CHAT_TOKEN?.trim() ?? undefined;
   const tunnelOnly = opts.tunnelOnly === true;
+  if (inboxes.get(app)?.closing) throw new Error("The agent's webhook inbox is still closing");
+  if (app.state && !inboxes.has(app)) {
+    inboxes.set(app, {
+      listeners: 0,
+      queue: new DurableInbox<InboundMessage>({
+        file: app.state.path("inkbox-inbox.json"),
+        handle: async (msg) => { await processInbound(app, msg); },
+        onError: (id, status) => log(`Inkbox event ${id}: ${status}`),
+      }),
+    });
+  }
+  const inbox = inboxes.get(app);
+  if (inbox) inbox.listeners++;
 
   const server = http.createServer((req, res) => {
     route(req, res).catch((err: unknown) => {
@@ -265,13 +306,9 @@ export function createHttpServer(app: HttpApp, opts: HttpServerOptions = {}): ht
       const payload = parseJson(raw);
       if (payload === undefined) return sendJson(res, 400, { error: "invalid JSON" });
       const inbound = parseInkboxEvent(payload);
+      if (inbound) await acceptInbound(app, inbound);
       res.statusCode = 204;
       res.end();
-      if (!inbound) return;
-      // Inkbox retries on slow responses, so the work happens after the 204.
-      app.runtime.handleInbound(inbound).catch((err: unknown) => {
-        log(`webhook handling failed for ${inbound.conversationKey}: ${(err as Error).message}`);
-      });
       return;
     }
 
@@ -282,7 +319,7 @@ export function createHttpServer(app: HttpApp, opts: HttpServerOptions = {}): ht
       return sendJson(res, 401, { error: "missing or invalid token" });
     }
 
-    if (method === "GET" && (path === "/" || path === "/status")) return sendJson(res, 200, statusJson(app));
+    if (method === "GET" && (path === "/" || path === "/status")) return sendJson(res, 200, { ...statusJson(app), ...(inbox ? { inkboxInbox: inbox.queue.summary() } : {}) });
     if (method === "GET" && path === "/schedules") return sendJson(res, 200, app.scheduler.toMaritimeSchedules());
 
     if (method === "POST" && path === "/chat") {
@@ -325,6 +362,12 @@ export function createHttpServer(app: HttpApp, opts: HttpServerOptions = {}): ht
       socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
     } catch {
       /* socket already gone */
+    }
+  });
+  server.on("listening", () => inbox?.queue.start());
+  server.on("close", () => {
+    if (inbox && --inbox.listeners === 0) {
+      void closeInkboxInbox(app);
     }
   });
 

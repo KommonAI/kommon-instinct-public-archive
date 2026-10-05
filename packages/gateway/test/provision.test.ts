@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { InkboxProvisioner } from "@open-instinct/inkbox";
 import { DEFAULT_MARITIME_LLM_MODEL, MARITIME_AGENT_PORT, agentEnvFor, linkRedirectUriFor, maritimeCreateBody, provisionUser, webhookUrlFor } from "../src/provision.js";
 import { UserStore } from "../src/store.js";
 import { fakeInkbox, fakeMaritime, readyUser, tempDir } from "./helpers.js";
@@ -23,13 +24,38 @@ function deps(ink = fakeInkbox(), mar = fakeMaritime(), store = new UserStore(te
 }
 
 describe("provisionUser", () => {
+  it("does not attach a new user to an existing readable identity", async () => {
+    const d = deps();
+    const calls: Array<{ method: string; path: string; body: Record<string, unknown> }> = [];
+    const inkbox = new InkboxProvisioner({ adminApiKey: "test_admin", baseUrl: "https://inkbox.example", fetchImpl: async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+      calls.push({ method, path, body });
+      let value: unknown;
+      if (path === "/api/v1/identities/maria") value = { id: "previous_identity", agent_handle: "maria", imessage_enabled: true };
+      else if (path === "/api/v1/identities/") {
+        if (body.agent_handle === "maria") return new Response("{}", { status: 409 });
+        value = { id: "new_identity", agent_handle: body.agent_handle, imessage_enabled: true };
+      } else if (path === "/api/v1/api-keys") value = { api_key: "test_scoped" };
+      else if (path.endsWith("/signing-key")) value = method === "GET" ? { configured: false } : { signing_key: "test_signing" };
+      else if (path === "/api/v1/webhooks/subscriptions") value = { id: "new_subscription" };
+      else throw new Error(`Unexpected request: ${method} ${path}`);
+      return new Response(JSON.stringify(value), { status: 200 });
+    } });
+    const user = await provisionUser(input, { ...d.deps, inkbox });
+    expect(user).toMatchObject({ identityId: "new_identity", handle: "maria-2", phone: input.phone });
+    expect(calls.some((call) => call.path === "/api/v1/identities/maria")).toBe(false);
+    expect(calls.find((call) => call.path === "/api/v1/api-keys")?.body.scoped_identity_id).toBe("new_identity");
+  });
+
   it("runs the steps in order and saves a ready record", async () => {
     const d = deps();
     const user = await provisionUser(input, d.deps);
     expect(d.ink.calls).toEqual([
       "provisionIdentity",
       "mintIdentityKey",
-      "createSigningKey",
+      "ensureSigningKey",
       `subscribeWebhooks https://gw.example.com/webhooks/inkbox/${user.id}`,
     ]);
     expect(d.mar.calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual(["GET /api/agents", "POST /api/agents"]);
@@ -96,6 +122,13 @@ describe("provisionUser", () => {
     expect(webhookUrlFor("https://gw.example.com///", "usr x")).toBe("https://gw.example.com/webhooks/inkbox/usr%20x");
   });
 
+  it("keeps the selected Inkbox endpoint with each agent's credentials", () => {
+    const env = agentEnvFor(readyUser(), {
+      inkboxBaseUrl: "https://inkbox.example", maritime: { apiKey: "test", agentImage: "image" },
+    });
+    expect(env).toContainEqual({ key: "INKBOX_BASE_URL", value: "https://inkbox.example", isSecret: false });
+  });
+
   it("sends the operator's toolkits with the Composio key and keeps an extraEnv PORT from duplicating", () => {
     const env = agentEnvFor(readyUser(), { composioApiKey: "cmp", composioToolkits: "gmail, slack", maritime: { apiKey: "k", agentImage: "img", extraEnv: { PORT: "8080", COMPOSIO_TOOLKITS: "ignored" } } });
     const byKey = Object.fromEntries(env.map((e) => [e.key, e.value]));
@@ -132,11 +165,11 @@ describe("provisionUser", () => {
 
   it("resumes after a failure without repeating finished steps", async () => {
     const d = deps();
-    d.ink.fail.createSigningKey = 1;
-    await expect(provisionUser(input, d.deps)).rejects.toThrow("createSigningKey failed");
+    d.ink.fail.ensureSigningKey = 1;
+    await expect(provisionUser(input, d.deps)).rejects.toThrow("ensureSigningKey failed");
     const partial = d.store.byHandle("maria")!;
     expect(partial.status).toBe("error");
-    expect(partial.error).toContain("createSigningKey");
+    expect(partial.error).toContain("ensureSigningKey");
     expect(partial.identityId).toBe("idn_maria");
     expect(partial.identityApiKey).toBe("ik_idn_maria");
     expect(d.mar.calls).toHaveLength(0);
@@ -147,8 +180,8 @@ describe("provisionUser", () => {
     expect(d.ink.calls).toEqual([
       "provisionIdentity",
       "mintIdentityKey",
-      "createSigningKey",
-      "createSigningKey",
+      "ensureSigningKey",
+      "ensureSigningKey",
       `subscribeWebhooks https://gw.example.com/webhooks/inkbox/${user.id}`,
     ]);
   });

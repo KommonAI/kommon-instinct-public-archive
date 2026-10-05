@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { InkboxProvisioner } from "@open-instinct/inkbox";
+import { DurableInbox } from "@open-instinct/inkbox";
+import { join } from "node:path";
 import { type SignupLimits, SlidingWindowLimiter, clientAddress, pendingCount, signupLimits } from "./limits.js";
 import { type Logger, consoleLogger } from "./logger.js";
 import { GITHUB_URL, type RouterInfo, connectRouterFor, renderConnect, renderLanding, renderLinkDone, renderMessage, renderPending } from "./pages.js";
 import { type LinkPassthrough, type MaritimeProvisionOptions, newUserId, provisionUser } from "./provision.js";
-import { EventDeduper, type HeaderMap, relayEvent, relayGatewayEvent, verifyForUser } from "./relay.js";
+import { EventDeduper, type HeaderMap, relayVerifiedEvent, relayGatewayEvent, verifyForUser } from "./relay.js";
 import { type UserRecord, type UserStore, publicUser } from "./store.js";
 import { validateSignup } from "./validate.js";
 
@@ -13,6 +15,7 @@ export interface GatewayOptions {
   publicUrl: string;
   /** Without a provisioner the gateway only relays; signup is disabled. */
   inkbox?: InkboxProvisioner;
+  inkboxBaseUrl?: string;
   maritime: MaritimeProvisionOptions;
   signupSecret?: string;
   anthropicApiKey?: string;
@@ -49,6 +52,8 @@ export interface GatewayOptions {
 export interface GatewayServer extends Server {
   /** Restart provisioning for every record left in "provisioning" by an earlier process. Returns how many. */
   resumePending(): number;
+  /** Stop admission work and wait for forwarding requests already in flight. */
+  drainWebhooks(): Promise<void>;
 }
 
 const JSON_TYPE = "application/json; charset=utf-8";
@@ -121,6 +126,22 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     logger: log,
     dedupe,
   };
+  const inbox = new DurableInbox<{ userId: string; identityId: string; event: Record<string, unknown> }>({
+    file: join(opts.store.dir, "webhook-inbox.json"),
+    replayRunning: true,
+    handle: async ({ userId, identityId, event }) => {
+      const user = opts.store.get(userId);
+      if (!user || user.identityId !== identityId) {
+        const error = new Error("Webhook identity is no longer assigned to this user");
+        error.name = "InboundUncertainError";
+        throw error;
+      }
+      if (!user.maritimeAgentId) throw new Error("Agent is not ready");
+      const result = await relayVerifiedEvent(user, event, relayDeps);
+      if (result.status === "rejected") throw new Error(result.reason ?? "Forwarding failed");
+    },
+    onError: (id, status) => log.warn("relay.pending", { id, status }),
+  });
 
   async function routerInfo(): Promise<RouterInfo | undefined> {
     if (!opts.inkbox) return undefined;
@@ -154,6 +175,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
     inFlight.add(user.id);
     provisionUser(user, {
       inkbox: opts.inkbox,
+      inkboxBaseUrl: opts.inkboxBaseUrl,
       maritime: opts.maritime,
       publicUrl: opts.publicUrl,
       store: opts.store,
@@ -272,12 +294,16 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       log.warn("webhook.unauthorized", { userId });
       return json(res, 401, { error: "invalid signature" });
     }
-    // Inkbox expects a fast 2xx. Forwarding waits on the agent, so it runs after the response.
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
+      if (!event || typeof event !== "object" || typeof event.id !== "string" || !event.id) throw new Error("invalid event");
+    } catch {
+      return json(res, 400, { error: "expected a webhook event with an id" });
+    }
+    inbox.enqueue(`${user.id}:${event.id}`, { userId: user.id, identityId: user.identityId, event });
     res.writeHead(204);
     res.end();
-    void relayEvent(user, raw, headers, relayDeps).catch((err) => {
-      log.error("relay.crashed", { userId, error: err instanceof Error ? err.message : String(err) });
-    });
   }
 
   /** Link sends the browser here after approval. The code goes to the agent, which holds the PKCE verifier. */
@@ -305,7 +331,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       return html(res, 200, renderLanding({ signupEnabled: Boolean(opts.inkbox), requireInvite: Boolean(opts.signupSecret) }));
     }
     if (parts[0] === "health" && parts.length === 1) {
-      return json(res, 200, { ok: true, users: opts.store.all().length, signup: Boolean(opts.inkbox), github: GITHUB_URL });
+      return json(res, 200, { ok: true, users: opts.store.all().length, signup: Boolean(opts.inkbox), github: GITHUB_URL, inbox: inbox.summary() });
     }
     if (parts[0] === "api" && parts[1] === "signup" && parts.length === 2) {
       if (method !== "POST") throw new HttpError(405, "method not allowed");
@@ -344,5 +370,7 @@ export function createGateway(opts: GatewayOptions): GatewayServer {
       json(res, status, { error: message });
     });
   });
-  return Object.assign(server, { resumePending });
+  server.on("listening", () => inbox.start());
+  server.on("close", () => inbox.stop());
+  return Object.assign(server, { resumePending, drainWebhooks: () => inbox.close() });
 }

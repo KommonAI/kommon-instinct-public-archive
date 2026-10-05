@@ -10,6 +10,12 @@ import type { Channel, Principal, ToolMeta } from "./types.js";
 export interface ToolContext {
   principal: Principal;
   conversationKey: string;
+  /** Channel address, distinct from a per-principal or per-task runtime key. */
+  deliveryKey?: string;
+  replyRef?: Record<string, string | undefined>;
+  /** Bound by the runtime; worker tools never accept a model-selected task. */
+  assertA2AActive?: () => Promise<void>;
+  markA2AState?: (state: string) => void;
   channel: Channel;
   now(): Date;
 }

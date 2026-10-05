@@ -43,8 +43,8 @@ export function parseRetryAfter(header: string | null | undefined, now: () => nu
 }
 
 /**
- * Same policy as the SDK's own send path (message_sends.js): a short bounded retry
- * on 429/502/503/504 honoring Retry-After up to 5 s. One difference: a 429 with no
+ * Reads and explicitly replay-safe requests get a short bounded retry
+ * on 429/502/503/504 honoring Retry-After up to 5 s. A 429 with no
  * Retry-After is a quota, not a hiccup, so it is thrown at once. The provisioner
  * relies on that for its phone-inventory fallback.
  */
@@ -97,7 +97,7 @@ export interface RestClient {
   /** `path` is relative to `/api/v1`, for example `/identities/maria`. */
   request<T = unknown>(method: string, path: string, body?: unknown, query?: Record<string, string | undefined>): Promise<T>;
   /** Absolute URL, same auth headers. Used for the public A2A routes under `/a2a/`. */
-  requestUrl<T = unknown>(method: string, url: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T>;
+  requestUrl<T = unknown>(method: string, url: string, body?: unknown, extraHeaders?: Record<string, string>, options?: { replaySafe?: boolean }): Promise<T>;
 }
 
 export function createRest(opts: RestOptions): RestClient {
@@ -105,7 +105,7 @@ export function createRest(opts: RestOptions): RestClient {
   const doFetch: typeof fetch = opts.fetchImpl ?? ((input, init) => globalThis.fetch(input, init));
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
-  async function requestUrl<T>(method: string, url: string, body?: unknown, extraHeaders?: Record<string, string>): Promise<T> {
+  async function requestUrl<T>(method: string, url: string, body?: unknown, extraHeaders?: Record<string, string>, options: { replaySafe?: boolean } = {}): Promise<T> {
     const headers: Record<string, string> = {
       Accept: "application/json",
       "X-API-Key": opts.apiKey,
@@ -122,7 +122,7 @@ export function createRest(opts: RestOptions): RestClient {
       const parsed = parseJson(text);
       if (res.ok) return parsed as T;
       const retryAfter = parseRetryAfter(res.headers.get("Retry-After"));
-      if (shouldRetry(res.status, retryAfter, attempt)) {
+      if ((method === "GET" || method === "HEAD" || options.replaySafe === true) && shouldRetry(res.status, retryAfter, attempt)) {
         await sleep(retryDelayMs(retryAfter, attempt));
         continue;
       }

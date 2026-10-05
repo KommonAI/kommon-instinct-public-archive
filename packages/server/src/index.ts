@@ -2,6 +2,7 @@ export { boot, apiKeyFor, DEFAULT_MARITIME_MCP_URL, PROVIDER_KEY_ENV } from "./b
 export type { BootOptions, BootResult } from "./boot.js";
 export {
   createHttpServer,
+  closeInkboxInbox,
   listenTunnelServer,
   handleChat,
   handleScheduledWake,

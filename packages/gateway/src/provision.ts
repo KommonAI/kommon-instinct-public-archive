@@ -50,6 +50,7 @@ export interface ProvisionDeps {
   maritime: MaritimeProvisionOptions;
   /** Public base URL of this gateway, used for the webhook subscription and OAuth redirects. */
   publicUrl: string;
+  inkboxBaseUrl?: string;
   store: UserStore;
   anthropicApiKey?: string;
   composioApiKey?: string;
@@ -63,7 +64,7 @@ export interface ProvisionDeps {
 }
 
 /** What agentEnvFor and maritimeCreateBody need from the deps. */
-export type AgentEnvDeps = Pick<ProvisionDeps, "anthropicApiKey" | "composioApiKey" | "composioToolkits" | "maritime" | "link"> & {
+export type AgentEnvDeps = Pick<ProvisionDeps, "anthropicApiKey" | "composioApiKey" | "composioToolkits" | "maritime" | "link" | "inkboxBaseUrl"> & {
   publicUrl?: string;
 };
 
@@ -107,6 +108,7 @@ export function agentEnvFor(user: UserRecord, deps: AgentEnvDeps): EnvVarInput[]
     { key: "INSTINCT_OWNER_NAME", value: user.name, isSecret: false },
     { key: "INSTINCT_OWNER_PHONE", value: user.phone, isSecret: false },
   ];
+  if (deps.inkboxBaseUrl) env.push({ key: "INKBOX_BASE_URL", value: deps.inkboxBaseUrl, isSecret: false });
   if (user.email) env.push({ key: "INSTINCT_OWNER_EMAIL", value: user.email, isSecret: false });
   if (deps.anthropicApiKey) env.push({ key: "ANTHROPIC_API_KEY", value: deps.anthropicApiKey, isSecret: true });
   if (deps.composioApiKey) {
@@ -240,9 +242,8 @@ function blankRecord(input: ProvisionInput, id: string): UserRecord {
 }
 
 /**
- * Provision one person end to end. Every step writes the record before moving
- * on, so a retry after a crash picks up where the last run stopped instead of
- * minting a second identity or a second agent.
+ * Provision one person end to end. Completed steps are recorded before moving
+ * on, so retries reuse the resources already saved for this person.
  */
 export async function provisionUser(input: ProvisionInput, deps: ProvisionDeps): Promise<UserRecord> {
   const log = deps.logger ?? silentLogger;
@@ -270,7 +271,7 @@ export async function provisionUser(input: ProvisionInput, deps: ProvisionDeps):
       log.info("provision.identity_key", { userId: user.id });
     }
     if (!user.signingKey) {
-      const key = await deps.inkbox.createSigningKey(user.handle);
+      const key = await deps.inkbox.ensureSigningKey(user.handle);
       user = store.save({ ...user, signingKey: key });
       log.info("provision.signing_key", { userId: user.id });
     }

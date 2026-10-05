@@ -1,6 +1,8 @@
 export { InkboxChannel, splitMessageText, parseConversationKey, IMESSAGE_MAX_CHARS } from "./channel.js";
 export type { InkboxChannelOptions, ParsedKey } from "./channel.js";
 export { parseInkboxEvent, INBOUND_EVENT_TYPES } from "./events.js";
+export { InkboxInboundHydrator, INBOUND_ATTACHMENT_BYTES, INBOUND_ATTACHMENT_LIMIT } from "./hydration.js";
+export type { HydrationOptions } from "./hydration.js";
 export { verifyInkboxSignature, computeInkboxSignature, parseWebhookTimestamp } from "./signature.js";
 export type { VerifyOptions } from "./signature.js";
 export { InkboxProvisioner, InkboxPlanLimitError, DEFAULT_WEBHOOK_EVENTS } from "./provisioner.js";
@@ -11,3 +13,5 @@ export { messagingTools, resolveTarget } from "./tools.js";
 export type { MessagingDeps, ResolvedTarget } from "./tools.js";
 export { InkboxHttpError, createRest, parseRetryAfter, isHttpStatus, INKBOX_BASE_URL } from "./http.js";
 export type { RestClient, RestOptions } from "./http.js";
+export { DurableInbox } from "./inbox.js";
+export type { DurableInboxOptions } from "./inbox.js";
