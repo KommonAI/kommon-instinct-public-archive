@@ -36,6 +36,11 @@ describe("config", () => {
     expect(state.readJson("config.json", null)).toEqual(cfg);
   });
 
+  it("accepts the older INSTINCT_TIMEZONE name, with INSTINCT_OWNER_TIMEZONE winning", () => {
+    expect(loadConfig(tempState(), { INSTINCT_TIMEZONE: "Europe/Berlin" }).owner.timezone).toBe("Europe/Berlin");
+    expect(loadConfig(tempState(), { INSTINCT_TIMEZONE: "Europe/Berlin", INSTINCT_OWNER_TIMEZONE: "Asia/Tokyo" }).owner.timezone).toBe("Asia/Tokyo");
+  });
+
   it("prefers the file over env on later loads, except INSTINCT_MODEL", () => {
     const state = tempState();
     loadConfig(state, { INSTINCT_OWNER_NAME: "Maria", INSTINCT_OWNER_PHONE: "+16175550100" });

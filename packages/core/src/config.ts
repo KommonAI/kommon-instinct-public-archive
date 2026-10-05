@@ -50,7 +50,9 @@ export function configFromEnv(env: NodeJS.ProcessEnv): InstinctConfig {
   if (env.INSTINCT_OWNER_NAME?.trim()) cfg.owner.name = env.INSTINCT_OWNER_NAME.trim();
   cfg.owner.phones = splitList(env.INSTINCT_OWNER_PHONE).map(normalizePhone).filter(Boolean);
   cfg.owner.emails = splitList(env.INSTINCT_OWNER_EMAIL).map(normalizeEmail).filter(Boolean);
-  if (env.INSTINCT_OWNER_TIMEZONE?.trim()) cfg.owner.timezone = env.INSTINCT_OWNER_TIMEZONE.trim();
+  // INSTINCT_TIMEZONE is the name older .env.example files used; keep honouring it.
+  const timezone = env.INSTINCT_OWNER_TIMEZONE?.trim() || env.INSTINCT_TIMEZONE?.trim();
+  if (timezone) cfg.owner.timezone = timezone;
   if (env.INSTINCT_MODEL?.trim()) cfg.model.primary = env.INSTINCT_MODEL.trim();
   if (env.INSTINCT_AGENT_NAME?.trim()) cfg.agent.name = env.INSTINCT_AGENT_NAME.trim();
   if (env.INKBOX_AGENT_HANDLE?.trim()) cfg.agent.handle = normalizeHandle(env.INKBOX_AGENT_HANDLE);
