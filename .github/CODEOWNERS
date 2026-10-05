@@ -1,0 +1,6 @@
+# Reviews are requested from these people automatically when a PR touches their area.
+# (Each owner must be a collaborator on the repository for the request to fire.)
+*                       @mariagorskikh
+/packages/inkbox/       @dimavrem22 @mariagorskikh
+/packages/network/      @dimavrem22 @mariagorskikh
+/docs/INKBOX.md         @dimavrem22 @mariagorskikh
