@@ -12,7 +12,7 @@ You text a phone number. [Inkbox](https://inkbox.ai) gives the agent that number
 
 It writes real files, too: ask for a brief "as a PDF" and it creates one in its workspace and sends it to you as an iMessage or email attachment. Any app Composio supports can be connected by name ("connect my Notion"), and the prompt it runs with is a file you can read and edit (`instinct prompt`, `instinct persona`; see [CUSTOMIZE.md](docs/CUSTOMIZE.md)).
 
-<p align="center"><img src="docs/assets/brand/stack.png" alt="The stack: Inkbox for iMessage, phone and email; Composio for apps; Stripe Link for one-time cards; Pi for the agent loop; Maritime for a computer per agent" width="900"></p>
+<p align="center"><img src="docs/assets/brand/stack.png" alt="Who does what: you text; Inkbox is identity and messaging; Maritime hosts one microVM with a desktop per person; inside it Pi runs the loop, Claude is the model, Composio connects apps, Stripe Link pays" width="900"></p>
 
 ## Who gets which key
 

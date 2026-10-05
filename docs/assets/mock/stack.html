@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Open Instinct: who does what</title>
+<style>
+  :root{--ink:#111;--teal:#0F766E;--muted:#555}
+  *{box-sizing:border-box}
+  body{margin:0;background:#fff;font-family:-apple-system,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;color:var(--ink)}
+  .page{width:1600px;height:760px;padding:40px 56px;position:relative}
+  .title{display:flex;align-items:center;gap:16px;margin-bottom:10px}
+  .title img{width:52px;height:52px}
+  .title h1{font-size:34px;margin:0;font-weight:700;letter-spacing:-.01em}
+  .title p{margin:0;color:var(--muted);font-size:18px}
+  .grid{display:grid;grid-template-columns:270px 110px 360px 110px 1fr;grid-template-rows:auto;align-items:center;margin-top:36px}
+  .box{border:3px solid var(--ink);border-radius:18px;padding:18px 20px;background:#fff;filter:url(#rough)}
+  .box h2{margin:0 0 6px;font-size:22px;display:flex;align-items:center;gap:12px}
+  .box h2 img{width:40px;height:40px;border-radius:9px;object-fit:contain}
+  .box .role{font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:700;margin-bottom:6px}
+  .box p{margin:0;font-size:16.5px;line-height:1.38;color:#222}
+  .arrow{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--muted);font-size:13px;text-align:center}
+  .arrow svg{width:90px;height:36px}
+  .vm{border:3px solid var(--teal);border-radius:22px;padding:18px 20px 20px;background:#F8FAF9;filter:url(#rough)}
+  .vm .head{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+  .vm .head img{width:44px;height:44px}
+  .vm .head h2{margin:0;font-size:22px}
+  .vm .sub{font-size:15.5px;color:#333;margin:0 0 14px}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card{border:2.5px solid var(--ink);border-radius:14px;padding:12px 14px;background:#fff}
+  .card h3{margin:0 0 4px;font-size:17px;display:flex;align-items:center;gap:10px}
+  .card h3 img{width:30px;height:30px;border-radius:7px;object-fit:contain}
+  .card .role{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:700;margin-bottom:3px}
+  .card p{margin:0;font-size:15px;line-height:1.32;color:#222}
+  .phone{width:200px;height:300px;border:3px solid var(--ink);border-radius:30px;margin:0 auto;position:relative;background:#fff;filter:url(#rough)}
+  .phone:before{content:"";position:absolute;top:12px;left:50%;transform:translateX(-50%);width:64px;height:8px;border-radius:4px;background:var(--ink)}
+  .bubble{position:absolute;left:22px;top:92px;width:150px;border:2.5px solid var(--ink);border-radius:16px;padding:10px 12px;font-size:14px;background:#fff}
+  .bubble.me{left:auto;right:18px;top:162px;width:120px;background:#1F8AFF;color:#fff;border-color:#1F8AFF}
+  .you{text-align:center;font-weight:700;font-size:20px;margin-top:14px}
+  .you small{display:block;font-weight:400;color:var(--muted);font-size:14px;margin-top:4px}
+  .foot{position:absolute;bottom:28px;left:56px;right:56px;display:flex;justify-content:space-between;color:var(--muted);font-size:13.5px}
+</style></head>
+<body><div class="page">
+<svg width="0" height="0" style="position:absolute"><filter id="rough"><feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="4"/></filter></svg>
+
+<div class="title"><img src="../logos/open-instinct.png" alt=""><div><h1>Open Instinct: who does what</h1><p>One agent per person. Five services, each behind one small package you can swap.</p></div></div>
+
+<div class="grid">
+  <div>
+    <div class="phone"><div class="bubble">Dinner with Sam this week?</div><div class="bubble me">Booked, Thu 7:30.</div></div>
+    <div class="you">You<small>iMessage, SMS or email. No app.</small></div>
+  </div>
+
+  <div class="arrow"><svg viewBox="0 0 90 36"><path d="M4 18 C 30 6, 55 30, 80 18" fill="none" stroke="#111" stroke-width="3" stroke-linecap="round"/><path d="M70 10 L82 18 L70 26" fill="none" stroke="#111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg><span>connect @maria once,<br>then just text</span></div>
+
+  <div class="box">
+    <div class="role">Identity and messaging</div>
+    <h2><img src="../logos/inkbox.png" alt="Inkbox">Inkbox</h2>
+    <p>Gives the agent its own phone number, iMessage line, email address and an agent-to-agent endpoint. Signs every inbound webhook. Other people's agents reach yours through it.</p>
+  </div>
+
+  <div class="arrow"><svg viewBox="0 0 90 36"><path d="M4 18 C 30 30, 55 6, 80 18" fill="none" stroke="#111" stroke-width="3" stroke-linecap="round"/><path d="M70 10 L82 18 L70 26" fill="none" stroke="#111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg><span>signed webhook,<br>wakes the agent</span></div>
+
+  <div class="vm">
+    <div class="head"><img src="../logos/maritime.png" alt="Maritime"><div><h2>Maritime</h2></div></div>
+    <div class="role">Hosting and the computer</div>
+    <p class="sub">One microVM per person with its own Linux desktop (Chromium, LibreOffice, files). Sleeps when idle, wakes in about a second. You take over the screen for logins and payments.</p>
+    <div class="cards">
+      <div class="card"><div class="role">Agent loop</div><h3><img src="../logos/pi.png" alt="Pi">Pi</h3><p>Runs the model, calls tools, keeps sessions. The policy guard sits in front of every tool.</p></div>
+      <div class="card"><div class="role">Model</div><h3><img src="../logos/anthropic.png" alt="Anthropic">Claude</h3><p>Fable 5.1 by default. Any provider in Pi's catalog, including local models.</p></div>
+      <div class="card"><div class="role">Apps</div><h3><img src="../logos/composio.png" alt="Composio">Composio</h3><p>Gmail, Calendar, Contacts and any other app, connected by the owner from a text.</p></div>
+      <div class="card"><div class="role">Payments</div><h3><img src="../logos/stripe.png" alt="Stripe">Stripe Link</h3><p>One-time cards for an exact amount, approved by the owner in Link before the agent pays.</p></div>
+    </div>
+  </div>
+</div>
+
+<div class="foot"><span>Trust tiers decide what each person's agent may ask yours: owner, partner, family, friend, contact, stranger.</span><span>github.com/mariagorskikh/open-instinct · MIT</span></div>
+</div></body></html>
