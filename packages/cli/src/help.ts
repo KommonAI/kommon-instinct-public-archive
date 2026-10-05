@@ -55,7 +55,7 @@ export const HELP_GROUPS: HelpGroup[] = [
       {
         name: "chat",
         usage: 'chat "<message>" [--url http://127.0.0.1:8080] [--agent <maritimeAgentId>] [--conversation <id>]',
-        summary: "Send one message to a running agent, locally or through api.maritime.sh. Sends INSTINCT_CHAT_TOKEN when set.",
+        summary: "Send one message to a running agent, locally or through api.maritime.sh. Local calls send INSTINCT_CHAT_TOKEN when set; --agent uses MARITIME_API_KEY.",
         example: 'instinct chat "what is on my calendar tomorrow"',
       },
       {
