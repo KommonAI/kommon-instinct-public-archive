@@ -1,0 +1,68 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
+:root{--ink:#111;--teal:#0F766E;--muted:#555;--blue:#1F8AFF}
+*{box-sizing:border-box}body{margin:0;background:#fff;font-family:-apple-system,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;color:var(--ink)}
+.page{width:1600px;height:820px;position:relative;overflow:hidden}
+.node{position:absolute;text-align:center}
+.node .ic{width:120px;height:120px;border:3px solid var(--ink);border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 10px;filter:url(#rough)}
+.node .ic img{width:62px;height:62px;border-radius:14px;object-fit:contain}
+.node h3{margin:0;font-size:24px}
+.node p{margin:4px 0 0;font-size:16px;color:#333;line-height:1.3}
+.lbl{position:absolute;font-size:16px;color:#222;background:#fff;padding:2px 8px;border-radius:8px}
+.title{position:absolute;left:56px;top:40px}
+.title h1{margin:0;font-size:34px;letter-spacing:-.01em}.title p{margin:4px 0 0;color:var(--muted);font-size:18px}
+.foot{position:absolute;bottom:26px;left:56px;right:56px;display:flex;justify-content:space-between;color:var(--muted);font-size:13.5px}
+.phone{width:70px;height:112px;border:3px solid var(--ink);border-radius:14px;position:relative;background:#fff}
+.phone:after{content:"";position:absolute;left:14px;top:24px;width:42px;height:28px;border:2.5px solid var(--ink);border-radius:9px 9px 9px 2px}
+.logos{display:flex;gap:10px;justify-content:center;margin-top:8px}.logos img{width:34px;height:34px;border-radius:8px;object-fit:contain;border:1.5px solid #ddd;background:#fff}
+</style></head><body><div class="page">
+<svg width="0" height="0" style="position:absolute"><filter id="rough"><feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="4"/></filter>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="16" markerHeight="16" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#111"/></marker></defs></svg>
+<style>
+.bub{position:absolute;max-width:230px;padding:9px 13px;border-radius:18px;font-size:15px;line-height:1.3}
+.bub.me{background:var(--blue);color:#fff;border-bottom-right-radius:5px}
+.bub.them{background:#E9E9EB;color:#111;border-bottom-left-radius:5px}
+.bub.a2a{background:#fff;border:2.5px solid var(--teal);color:#111;border-radius:14px}
+.gate{position:absolute;left:706px;top:408px;width:188px;text-align:center;background:#fff;border:3px solid var(--teal);border-radius:16px;padding:10px 12px;filter:url(#rough)}
+.gate .k{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:700}
+.gate .t{font-size:15px;line-height:1.3;margin-top:4px}
+.small{font-size:13.5px;color:#444}
+</style>
+<div class="title"><h1>Your agent talks to Sam's agent</h1><p>Two people, two agents. The agents do the back-and-forth. You each get one question.</p></div>
+<svg style="position:absolute;left:0;top:0" width="1600" height="900">
+  <!-- you <-> your agent -->
+  <path d="M 250 410 C 300 330, 420 330, 470 400" fill="none" stroke="#111" stroke-width="4" stroke-linecap="round" marker-end="url(#ah)"/>
+  <path d="M 470 520 C 420 590, 300 590, 250 510" fill="none" stroke="#111" stroke-width="4" stroke-linecap="round" marker-end="url(#ah)"/>
+  <!-- sam <-> sam's agent -->
+  <path d="M 1350 410 C 1300 330, 1180 330, 1130 400" fill="none" stroke="#111" stroke-width="4" stroke-linecap="round" marker-end="url(#ah)"/>
+  <path d="M 1130 520 C 1180 590, 1300 590, 1350 510" fill="none" stroke="#111" stroke-width="4" stroke-linecap="round" marker-end="url(#ah)"/>
+  <!-- agent <-> agent -->
+  <path d="M 640 405 C 720 340, 880 340, 960 405" fill="none" stroke="#0F766E" stroke-width="5" stroke-linecap="round" marker-end="url(#ah)"/>
+  <path d="M 960 520 C 880 585, 720 585, 640 520" fill="none" stroke="#0F766E" stroke-width="5" stroke-linecap="round" marker-end="url(#ah)"/>
+</svg>
+
+<!-- people -->
+<div class="node" style="left:110px;top:400px;width:140px"><div class="ic"><div class="phone"></div></div><h3>You</h3><p>iMessage</p></div>
+<div class="node" style="left:1350px;top:400px;width:140px"><div class="ic"><div class="phone"></div></div><h3>Sam</h3><p>iMessage</p></div>
+
+<!-- agents -->
+<div class="node" style="left:460px;top:385px;width:170px"><div class="ic" style="width:150px;height:150px;border-color:#0F766E"><img src="../logos/maritime.png" style="width:70px;height:70px" alt=""></div><h3>Your agent</h3><p class="small">its own computer on Maritime</p><div class="logos"><img src="../logos/pi.png" alt="Pi"><img src="../logos/anthropic.png" alt="Claude"><img src="../logos/composio.png" alt="Composio"><img src="../logos/stripe.png" alt="Stripe Link"></div></div>
+<div class="node" style="left:970px;top:385px;width:170px"><div class="ic" style="width:150px;height:150px;border-color:#0F766E"><img src="../logos/maritime.png" style="width:70px;height:70px" alt=""></div><h3>Sam's agent</h3><p class="small">its own computer too</p><div class="logos"><img src="../logos/pi.png" alt="Pi"><img src="../logos/anthropic.png" alt="Claude"><img src="../logos/composio.png" alt="Composio"><img src="../logos/stripe.png" alt="Stripe Link"></div></div>
+
+<!-- the gate in the middle -->
+<div class="gate"><div class="k">Sam's key: friend</div><div class="t">free/busy yes<br>calendar titles no<br>booking: ask you first</div></div>
+<div style="position:absolute;left:640px;top:596px;width:320px;text-align:center;font-size:14px;color:#0F766E;font-weight:700;letter-spacing:.06em">AGENT TO AGENT, THROUGH INKBOX</div>
+
+<!-- inkbox on the human links -->
+<div style="position:absolute;left:325px;top:300px;display:flex;align-items:center;gap:6px;font-size:14px;color:#333"><img src="../logos/inkbox.png" style="width:26px;border-radius:6px" alt="">via Inkbox</div>
+<div style="position:absolute;left:1190px;top:300px;display:flex;align-items:center;gap:6px;font-size:14px;color:#333"><img src="../logos/inkbox.png" style="width:26px;border-radius:6px" alt="">via Inkbox</div>
+
+<!-- example bubbles -->
+<div class="bub me" style="left:90px;top:220px">Dinner with Sam this week?</div>
+<div class="bub them" style="left:60px;top:650px">Sam can do Thu 7:30. Book Burma Love for 2? YES or NO</div>
+<div class="bub a2a" style="left:690px;top:262px;max-width:220px">Maria wants dinner this week. Which evenings is Sam free?</div>
+<div class="bub a2a" style="left:690px;top:628px;max-width:220px">Thu after 7 or Fri after 8. Sam likes Burmese.</div>
+<div class="bub them" style="left:1300px;top:200px">Maria's agent is asking about dinner this week. Share your free evenings? YES or NO</div>
+<div class="bub them" style="left:1330px;top:650px">Booked: Thu 7:30, Burma Love. On your calendar.</div>
+
+<div class="foot"><span>Strangers' agents get a polite no, and you are told who asked. Tiers: owner · partner · family · friend · contact · stranger.</span><span>github.com/mariagorskikh/open-instinct</span></div>
+</div></body></html>

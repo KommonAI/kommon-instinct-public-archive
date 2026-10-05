@@ -6,7 +6,7 @@
 
 ## How it works
 
-<p align="center"><img src="docs/assets/brand/architecture.png" alt="What happens when you text your agent, in five steps" width="900"></p>
+<p align="center"><img src="docs/assets/brand/architecture.png" alt="Your agent talks to Sam's agent: you text your agent, the two agents do the back-and-forth through Inkbox within the key you gave Sam, and you each get one question" width="900"></p>
 
 You text a phone number. [Inkbox](https://inkbox.ai) gives the agent that number, an email address and an agent-to-agent endpoint. A small gateway wakes your agent, which lives in its own microVM on [Maritime](https://maritime.sh) with a Linux desktop. Inside, a [Pi](https://github.com/earendil-works/pi) agent loop runs with your apps through [Composio](https://composio.dev), a wallet through [Stripe Link](https://docs.stripe.com/agentic-commerce/agents/link-agent-wallet), and a policy guard in front of every tool. Default model: Claude Fable 5.1. Any Pi provider works.
 
