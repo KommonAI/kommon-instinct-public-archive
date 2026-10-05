@@ -45,8 +45,20 @@ export function loadSkillList(dir: string | undefined, logger?: (m: string) => v
   try {
     const { skills, diagnostics } = loadSkillsFromDir({ dir, source: "open-instinct" });
     for (const d of diagnostics) logger?.(`skill warning: ${JSON.stringify(d)}`);
-    if (skills.length > 0) logger?.(`loaded ${skills.length} skills from ${dir}`);
-    return skills;
+    // load_skill looks skills up by lowercased name, so two names that differ only in case
+    // would shadow each other. Keep the first and say so.
+    const seen = new Set<string>();
+    const unique = skills.filter((s) => {
+      const key = s.name.toLowerCase();
+      if (seen.has(key)) {
+        logger?.(`skill warning: duplicate name "${s.name}" at ${s.filePath} ignored`);
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+    if (unique.length > 0) logger?.(`loaded ${unique.length} skills from ${dir}`);
+    return unique;
   } catch (err) {
     logger?.(`skills not loaded from ${dir}: ${(err as Error).message}`);
     return [];

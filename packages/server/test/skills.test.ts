@@ -68,4 +68,15 @@ describe("skills", () => {
     expect(loadSkillsPrompt(dir)).toBeUndefined();
     expect(textOf(await loadSkillTool(list).spec.execute({ name: "nightly" }, stranger))).toContain("Wrap up the day.");
   });
+
+  it("keeps the first of two skills whose names differ only in case", () => {
+    for (const [folder, name] of [["a", "Dining"], ["b", "dining"]]) {
+      mkdirSync(join(dir, folder));
+      writeFileSync(join(dir, folder, "SKILL.md"), `---\nname: ${name}\ndescription: Book tables ${folder}\n---\n\nFrom ${folder}.\n`);
+    }
+    const logs: string[] = [];
+    const list = loadSkillList(dir, (m) => logs.push(m));
+    expect(list).toHaveLength(1);
+    expect(logs.some((l) => l.includes("duplicate name"))).toBe(true);
+  });
 });
