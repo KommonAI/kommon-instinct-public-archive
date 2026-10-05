@@ -69,6 +69,8 @@ export interface RuntimeDeps {
   describeData?: (data: Record<string, unknown>) => string | undefined;
   /** Extra system prompt sections per principal and channel, for example the network guidance. */
   promptExtra?: (principal: Principal, channel: Channel) => string[];
+  /** "What is set up right now", read fresh for every prompt build. */
+  setupSummary?: () => string | undefined;
   a2aStore?: A2AStore;
   loadA2ATask?: (taskId: string) => Promise<unknown>;
 }
@@ -855,6 +857,7 @@ export class AgentRuntime {
       instructions: readAgentsInstructions(state),
       skillsPrompt,
       pendingApprovals: pending,
+      setup: this.deps.setupSummary?.(),
       extra,
     });
   }

@@ -119,7 +119,7 @@ describe("buildSystemPrompt", () => {
 
   it("describePromptLayers lists the sections in prompt order with their sources", () => {
     const layers = describePromptLayers(input({ instructions: "Be brief.", skillsPrompt: "## dining", extra: ["# Network\nPeers.", " "] }));
-    expect(layers.map((l) => l.id)).toEqual(["identity", "instructions", "owner", "principal", "channel", "rules", "memory", "skills", "long-tasks", "now", "extra"]);
+    expect(layers.map((l) => l.id)).toEqual(["identity", "instructions", "owner", "principal", "channel", "reach", "rules", "memory", "skills", "long-tasks", "now", "extra"]);
     expect(layers.map((l) => l.text).join("\n\n")).toBe(buildSystemPrompt(input({ instructions: "Be brief.", skillsPrompt: "## dining", extra: ["# Network\nPeers.", " "] })));
     const byId = Object.fromEntries(layers.map((l) => [l.id, l]));
     expect(byId.identity!.source).toBe(PROMPT_SOURCES.personaDefault);

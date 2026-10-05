@@ -24,6 +24,8 @@ export interface PromptInput {
   instructions?: string;
   skillsPrompt?: string;
   pendingApprovals?: Approval[];
+  /** "What is set up right now": channels, desktop, apps, payments, as the server knows them. */
+  setup?: string;
   extra?: string[];
 }
 
@@ -45,6 +47,8 @@ export const PROMPT_SOURCES = {
   owner: "config.json owner",
   principal: "contacts.json tier and policy.json capabilities",
   channel: "built-in channel etiquette",
+  reach: "built-in: everything happens in this chat",
+  setup: "server boot: what is configured right now",
   rules: "built-in safety rules",
   memory: "<data>/memory/MEMORY.md and memory/journal/",
   skills: "skills/ index and tool guidance (computer, apps)",
@@ -61,6 +65,8 @@ export function describePromptLayers(input: PromptInput): PromptLayer[] {
     layer("owner", PROMPT_SOURCES.owner, ownerSection(input)),
     layer("principal", PROMPT_SOURCES.principal, principalSection(input)),
     layer("channel", PROMPT_SOURCES.channel, channelSection(input.channel)),
+    layer("reach", PROMPT_SOURCES.reach, reachSection(input)),
+    layer("setup", PROMPT_SOURCES.setup, input.setup?.trim() || undefined),
     layer("rules", PROMPT_SOURCES.rules, rulesSection(input)),
     layer("memory", PROMPT_SOURCES.memory, memorySection(input.memoryDigest)),
     layer("skills", PROMPT_SOURCES.skills, skillsSection(input.skillsPrompt)),
@@ -226,6 +232,33 @@ function channelSection(channel: Channel): string {
       break;
   }
   return lines.join("\n");
+}
+
+/**
+ * The owner has no app, no settings page and no dashboard to be sent to. Every link,
+ * file and hand-off travels through the thread they are already in. Spelled out
+ * because a model that does not know this invents a "settings page".
+ */
+function reachSection({ principal, config, channel }: PromptInput): string {
+  if (channel === "system") return "";
+  if (principal.kind !== "owner") {
+    return [
+      "# Everything happens in this thread",
+      `You are talking with ${principal.displayName} (${principal.tier}), not with ${config.owner.name}. Whatever you may do for them happens here, in this thread.`,
+      `Do not send them links to connect apps, files from ${config.owner.name}'s workspace, or desktop takeover links; those belong to ${config.owner.name}.`,
+    ].join("\n");
+  }
+  const owner = config.owner.name;
+  return [
+    "# Everything happens in this chat",
+    `${owner} talks to you here and nowhere else. There is no app, no settings page and no account screen to send them to.`,
+    "- To connect an app (Gmail, Calendar, Notion, anything): call apps_connect with the toolkit name and send the link it returns in this chat. Never tell them to \"open settings\" or \"go to the app\".",
+    "- To deliver a file or a PDF: call send_file; it arrives as an iMessage or email attachment. A file path on its own is not an answer.",
+    "- When a login, 2FA, CAPTCHA or payment screen comes up on the desktop: call request_takeover and send the link it returns, with one line saying what to do there.",
+    "- To connect the wallet: call payment_connect and send the link.",
+    "- When something is not set up on this agent, the \"What is set up right now\" section says so. Then say it in one sentence, name the exact thing to set up, and offer what you can do instead. Never guess at a screen or a setting that does not exist.",
+    "- Never describe your own machinery (containers, servers, processes, tunnels). Talk about results.",
+  ].join("\n");
 }
 
 function rulesSection({ config }: PromptInput): string {

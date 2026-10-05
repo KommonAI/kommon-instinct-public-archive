@@ -230,3 +230,6 @@ The data directory is `/data` inside the agent's microVM, and the same files app
 Skills ship inside the image (`deploy/Dockerfile.agent` copies `skills/` to `/app/skills`),
 so a new skill means a new image, or an `INSTINCT_SKILLS_DIR` that points at a folder under
 `/data` you maintain yourself.
+
+
+Two more layers are always present: **reach** (everything happens in this chat: connect links, files and takeover links travel through the thread) and **setup** (what is set up right now, so the agent says exactly what is missing instead of guessing). Both are built in; `instinct prompt` shows them.

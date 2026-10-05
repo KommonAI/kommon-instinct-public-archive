@@ -34,6 +34,7 @@ import { networkTools } from "@open-instinct/network";
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools } from "./file-tools.js";
 import { describeDataPart, promptExtraFor } from "./hooks.js";
+import { appsNotConfiguredTool, setupSummaryFor } from "./setup-summary.js";
 import { createScheduleSync, type ScheduleSync } from "./maritime-schedules.js";
 import { loadPaymentsModule, paymentsEnv, type LinkWalletLike, type PaymentsModule } from "./payments.js";
 import { loadSkillsPrompt, resolveSkillsDir } from "./skills.js";
@@ -212,6 +213,9 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       log(`apps: ${connected.tools.length} tools${composio.allToolkits ? " (any app by name)" : ""}, connected: ${on.join(", ") || "none"}`);
     }
   }
+  // No Composio key: the model still gets an apps_connect tool, so "connect my Gmail"
+  // produces one precise sentence about what to set up instead of an invented screen.
+  if (!apps) registry.register(appsNotConfiguredTool());
 
   // Trusted network: contacts, tiers, grants, A2A.
   registry.registerMany(
@@ -287,6 +291,13 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     // Core cannot import the network package; the server bridges OIP and the network guidance.
     describeData: describeDataPart,
     promptExtra: promptExtraFor,
+    setupSummary: () =>
+      setupSummaryFor({
+        inkbox: inkbox ? { handle: inkbox.handle } : undefined,
+        computerKind: computer?.kind,
+        apps: apps ? { connected: appsConnected ?? [], anyApp: apps.allToolkits, toolkits: apps.toolkitSlugs } : undefined,
+        wallet: wallet ? { connected: wallet.isConnected() } : undefined,
+      }),
     ...(env.INSTINCT_REPLY_BUDGET_MS ? { replyBudgetMs: Number(env.INSTINCT_REPLY_BUDGET_MS) } : {}),
   });
 
