@@ -1,7 +1,12 @@
 /**
  * System prompt builder. The prompt is assembled from the config, the principal and the
  * current state so it can be rebuilt before every run. Nothing secret goes in here.
+ *
+ * The prompt is a list of layers. `describePromptLayers` returns them with the file or
+ * module each one comes from, so the owner can see what the agent is told
+ * (`instinct prompt --layers`); `buildSystemPrompt` joins them into the text the model gets.
  */
+import { DEFAULT_PERSONA } from "./persona.js";
 import { OWNER_EMAIL_PRINCIPAL_ID } from "./principal.js";
 import type { Approval, Capability, Channel, InstinctConfig, Principal, Tier } from "./types.js";
 
@@ -13,26 +18,68 @@ export interface PromptInput {
   capabilities: Capability[];
   toolGroups: string[];
   memoryDigest: string;
+  /** PERSONA.md from the data dir. Absent: the built-in default persona. */
+  persona?: string;
+  /** AGENTS.md from the data dir: standing instructions appended after the persona. */
+  instructions?: string;
   skillsPrompt?: string;
   pendingApprovals?: Approval[];
   extra?: string[];
 }
 
-export function buildSystemPrompt(input: PromptInput): string {
-  const sections = [
-    identitySection(input),
-    ownerSection(input),
-    principalSection(input),
-    channelSection(input.channel),
-    rulesSection(input),
-    memorySection(input.memoryDigest),
-    skillsSection(input.skillsPrompt),
-    approvalsSection(input.pendingApprovals),
-    longTaskSection(input.channel),
-    timeSection(input),
-    ...(input.extra ?? []).map((text) => text.trim()).filter((text) => text.length > 0),
+/** One section of the system prompt and where it comes from. */
+export interface PromptLayer {
+  /** Stable id: identity, instructions, owner, principal, channel, rules, memory, skills, approvals, long-tasks, now, extra. */
+  id: string;
+  /** The file or module that decides this layer's content. */
+  source: string;
+  text: string;
+}
+
+/** Where each layer comes from, for the owner's eyes. Kept in one place so the docs stay true. */
+export const PROMPT_SOURCES = {
+  personaFile: "<data>/PERSONA.md",
+  personaDefault: "built-in default (no PERSONA.md yet; `instinct persona reset` writes it)",
+  personaConfig: "config.json agent.persona",
+  instructions: "<data>/AGENTS.md",
+  owner: "config.json owner",
+  principal: "contacts.json tier and policy.json capabilities",
+  channel: "built-in channel etiquette",
+  rules: "built-in safety rules",
+  memory: "<data>/memory/MEMORY.md and memory/journal/",
+  skills: "skills/ index and tool guidance (computer, apps)",
+  approvals: "<data>/approvals.json",
+  longTasks: "built-in",
+  now: "the clock and config.json owner.timezone",
+  extra: "server hooks (network guidance)",
+} as const;
+
+export function describePromptLayers(input: PromptInput): PromptLayer[] {
+  const layers: Array<PromptLayer | undefined> = [
+    layer("identity", identitySource(input), identitySection(input)),
+    layer("instructions", PROMPT_SOURCES.instructions, instructionsSection(input.instructions)),
+    layer("owner", PROMPT_SOURCES.owner, ownerSection(input)),
+    layer("principal", PROMPT_SOURCES.principal, principalSection(input)),
+    layer("channel", PROMPT_SOURCES.channel, channelSection(input.channel)),
+    layer("rules", PROMPT_SOURCES.rules, rulesSection(input)),
+    layer("memory", PROMPT_SOURCES.memory, memorySection(input.memoryDigest)),
+    layer("skills", PROMPT_SOURCES.skills, skillsSection(input.skillsPrompt)),
+    layer("approvals", PROMPT_SOURCES.approvals, approvalsSection(input.pendingApprovals)),
+    layer("long-tasks", PROMPT_SOURCES.longTasks, longTaskSection(input.channel)),
+    layer("now", PROMPT_SOURCES.now, timeSection(input)),
+    ...(input.extra ?? []).map((text) => layer("extra", PROMPT_SOURCES.extra, text.trim() || undefined)),
   ];
-  return sections.filter((s): s is string => Boolean(s)).join("\n\n");
+  return layers.filter((l): l is PromptLayer => l !== undefined);
+}
+
+export function buildSystemPrompt(input: PromptInput): string {
+  return describePromptLayers(input)
+    .map((l) => l.text)
+    .join("\n\n");
+}
+
+function layer(id: string, source: string, text: string | undefined): PromptLayer | undefined {
+  return text ? { id, source, text } : undefined;
 }
 
 /** Mark text from anyone but the owner as data. The model is told not to obey it. */
@@ -44,16 +91,38 @@ export function wrapUntrusted(text: string, label: string): string {
 
 // ---------------------------------------------------------------------------
 
-function identitySection({ config }: PromptInput): string {
+function identitySource({ persona, config }: PromptInput): string {
+  const base = persona?.trim() ? PROMPT_SOURCES.personaFile : PROMPT_SOURCES.personaDefault;
+  return config.agent.persona?.trim() ? `${base}, plus ${PROMPT_SOURCES.personaConfig}` : base;
+}
+
+/**
+ * Who the agent is: a fixed two-line frame (name, owner, what it is), then the persona
+ * file, then the one-line persona from config.json when set. The file is the base;
+ * the config line wins where they disagree.
+ */
+function identitySection({ config, persona }: PromptInput): string {
   const name = config.agent.name || "Instinct";
   const lines = [
     `# You are ${name}`,
     `You are ${config.owner.name}'s personal agent, built on Open Instinct. You have your own phone number, email and computer. You do real tasks for ${config.owner.name}: research, scheduling, messages, bookings, files. You can coordinate with the agents of people ${config.owner.name} trusts.`,
   ];
   if (config.agent.handle) lines.push(`Your agent handle is @${config.agent.handle}.`);
-  if (config.agent.persona?.trim()) lines.push(`Persona: ${config.agent.persona.trim()}`);
-  else lines.push("Persona: warm, direct, competent. Say less. Do more. Never flatter.");
+  lines.push("", demoteHeadings(persona?.trim() || DEFAULT_PERSONA.trim()));
+  const note = config.agent.persona?.trim();
+  if (note) lines.push("", `Persona: ${note} (This line comes from config.json and wins over anything above that disagrees with it.)`);
   return lines.join("\n");
+}
+
+function instructionsSection(instructions: string | undefined): string | undefined {
+  const text = instructions?.trim();
+  if (!text) return undefined;
+  return `# Standing instructions\n${demoteHeadings(text)}`;
+}
+
+/** `# ` headings mark prompt sections, so a file's own headings move one level down. */
+function demoteHeadings(markdown: string): string {
+  return markdown.replace(/^(#{1,5}) /gm, "#$1 ");
 }
 
 function ownerSection({ config, principal }: PromptInput): string {

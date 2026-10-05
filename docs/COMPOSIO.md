@@ -1,8 +1,9 @@
 # Apps through Composio
 
-Open Instinct reaches Gmail, Google Calendar and Google Contacts through Composio.
-This page explains what Composio is, how to get a key, how the owner connects an
-app from a text message, and what each tool is allowed to do.
+Open Instinct reaches Gmail, Google Calendar, Google Contacts and, with
+`COMPOSIO_TOOLKITS=all`, any of Composio's apps through Composio. This page explains
+what Composio is, how to get a key, how the owner connects an app from a text
+message, and what each tool is allowed to do.
 
 Code: [`packages/apps`](../packages/apps/README.md). Server wiring: [`packages/server`](../packages/server/README.md).
 
@@ -59,26 +60,41 @@ id. Deleting `apps.json` forces a fresh session on the next boot.
 Google tokens live inside Composio, not on the agent. Nothing from Google is written
 to disk in the agent.
 
-## How the owner connects Gmail and Calendar
+## How the owner connects an app from a text
 
 The owner never types a password into the chat. The whole flow is a link.
 
 | Step | Who | What happens |
 |---|---|---|
 | 1 | deployer | Sets `COMPOSIO_API_KEY`. The server creates the session on boot. |
-| 2 | agent | Its prompt says which apps are not connected yet. |
+| 2 | agent | Its prompt says which apps are connected and which are not. |
 | 3 | owner | Texts "connect my Gmail". |
-| 4 | agent | Calls `app_composio_manage_connections` for `gmail` and texts back the link. |
+| 4 | agent | Calls `apps_connect` for `gmail` and texts back the link. |
 | 5 | owner | Opens the link on their phone, signs in with Google, approves the scopes. |
 | 6 | Composio | Stores the tokens. The Gmail tools now work. |
 
-The same steps connect `googlecalendar` and `googlecontacts`.
+The same text works for any app. What the owner can say, and what the agent does:
 
-Only the owner can connect or disconnect an app. If a partner or a friend asks, the
-agent declines and offers to tell the owner.
+| Owner texts | Agent does |
+|---|---|
+| "which apps are connected?" | Calls `apps_list` and answers from it. |
+| "connect my calendar" | `apps_connect googlecalendar`, sends the link. |
+| "connect Notion" | `apps_connect notion`, sends the link. Needs `notion` in `COMPOSIO_TOOLKITS`, or `all`. |
+| "hook up Slack" | `apps_connect slack`, sends the link. |
+| "connect my GitHub" | `apps_connect github`, sends the link. |
+| "disconnect Gmail" | `app_composio_manage_connections`, which revokes the connection. |
 
-To disconnect, the owner can revoke access in their Google account settings, or ask
-the agent to disconnect, which calls `app_composio_manage_connections` again.
+If an app is not in the toolkit list, `apps_connect` says so and names the fix:
+add the slug to `COMPOSIO_TOOLKITS`, or set `COMPOSIO_TOOLKITS=all`. The slug is
+the app's name in Composio's catalog, lowercase: `gmail`, `googlecalendar`,
+`googlecontacts`, `notion`, `slack`, `github`, `linear`, `hubspot`, and so on.
+
+Only the owner can connect or disconnect an app. `apps_connect` refuses every other
+caller on its own, before the policy engine even looks. If a partner or a friend
+asks, the agent declines and offers to tell the owner.
+
+To disconnect, the owner can revoke access in the app's own account settings, or ask
+the agent to disconnect, which calls `app_composio_manage_connections`.
 
 ## Tool families, capabilities and tiers
 
@@ -99,27 +115,42 @@ mail as the owner.
 | `GOOGLECONTACTS_CREATE*`, `UPDATE*`, `DELETE*`, `BATCH*`, `MODIFY*`, `ADD*`, `REMOVE*`, `PATCH*`, `COPY*` | `contacts.read` + `memory.write` | yes | no | no | no |
 | other `GOOGLECONTACTS_*` | `contacts.read` | yes | partial | no | no |
 | `COMPOSIO_MANAGE_CONNECTIONS`, `COMPOSIO_SEARCH_TOOLS`, `COMPOSIO_MULTI_EXECUTE_TOOL` | `apps.use` + `trust.manage` | yes | no | no | no |
-| any other toolkit (Slack, Notion, ...) | `apps.use` + `trust.manage` | yes | no | no | no |
+| `apps_list`, `apps_connect` | `apps.use` + `trust.manage` | yes | no | no | no |
+| any other toolkit, read (`*_GET_*`, `*_LIST_*`, `*_SEARCH_*`, `*_FETCH_*`, ...) | `apps.use` + `trust.manage` | yes | no | no | no |
+| any other toolkit, plain write (`NOTION_CREATE_PAGE`, `GITHUB_CREATE_ISSUE`, `LINEAR_UPDATE_ISSUE`, `GITHUB_DELETE_*`) | `apps.use` + `trust.manage` | yes | no | no | no |
+| any other toolkit, send (`SLACK_SEND_MESSAGE`, `OUTLOOK_SEND_EMAIL`, `TWILIO_SEND_SMS`, `*_REPLY_*`, `*_FORWARD_*`) | `email.send` + `apps.use` + `trust.manage` | yes | no | no | no |
+| any other toolkit, calendar write (`OUTLOOK_CALENDAR_CREATE_EVENT`, `ZOOM_CREATE_MEETING`, `CALENDLY_CANCEL_EVENT`) | `calendar.write` + `apps.use` + `trust.manage` | yes | no | no | no |
+| any other toolkit, money (`STRIPE_CREATE_*`, `PAYPAL_*PAYOUT*`, `SHOPIFY_CREATE_ORDER`, `WISE_CREATE_TRANSFER`, `*_CHECKOUT_*`, `*_PAY*`, `*_CHARGE*`, `*_REFUND*`) | `purchase` + `apps.use` + `trust.manage` | ask | no | no | no |
 
 Contacts and strangers get no app tools at all.
 
-Two notes on the table:
+Notes on the table:
 
-- `apps.use` is a transport tag. It says who may use Composio at all. The second
-  tag on the same tool does the real gating.
-- Rows with two tags are owner-only on purpose. `trust.manage` stands in for a
-  future `apps.manage`. `memory.write` stands in for a future `contacts.write`.
+- `apps.use` is a transport tag. It says who may use Composio at all. The other
+  tags on the same tool do the real gating.
+- Rows with `trust.manage` are owner-only on purpose. `trust.manage` stands in for
+  a future `apps.manage`. `memory.write` stands in for a future `contacts.write`.
   The constants `APPS_MANAGE` and `CONTACTS_WRITE` in
   [`packages/apps/src/capabilities.ts`](../packages/apps/src/capabilities.ts) are
   the one place to change when core adds those capabilities.
+- A toolkit without its own row is judged by the words in the tool slug. Reads get
+  no extra tag. A write that sends, changes a calendar or moves money gets the
+  matching stricter tag on top of the owner-only pair. Every write in a payment
+  toolkit (Stripe, PayPal, Square, Wise, Coinbase, Mercury, Brex, Ramp, ...) counts
+  as money. The full word lists are in `sensitiveCapabilitiesForSlug`.
+- The stricter tag matters in two places. A grant that names only `apps.use` and
+  `trust.manage` opens Notion and GitHub for that person, but not Slack sends or
+  Stripe charges. And `purchase` puts the owner's own call under the spend policy:
+  the agent does not know the amount, so it asks the owner before any app action
+  that moves money. Deletes in an unknown app are owner-only with no extra step.
 
 A grant can widen a row for one person and a short time. See
 [PERMISSIONS.md](PERMISSIONS.md#grants).
 
 ## Adding toolkits with COMPOSIO_TOOLKITS
 
-`COMPOSIO_TOOLKITS` is a comma-separated list of Composio toolkit slugs. The
-default is `gmail,googlecalendar,googlecontacts`.
+`COMPOSIO_TOOLKITS` is a comma-separated list of Composio toolkit slugs, or the
+word `all`. The default is `gmail,googlecalendar,googlecontacts`.
 
 ```bash
 export COMPOSIO_API_KEY=...
@@ -138,18 +169,55 @@ instinct dev
 Toolkit slugs are lowercase. Find them in the Composio toolkit catalog, for example
 `slack`, `notion`, `github`.
 
-A toolkit outside Gmail, Calendar and Contacts has no row in the capability table.
-Its tools are owner-only until someone adds a row. That is the safe default.
+A toolkit outside Gmail, Calendar and Contacts has no row of its own in the
+capability table. Its tools are owner-only, with a stricter tag when the slug
+sends, changes a calendar or moves money (table above). That is the safe default.
 
 Changing the list makes a new Composio session on the next boot. Existing OAuth
 connections stay, because Composio stores them per user id, not per session.
+
+## Every app: COMPOSIO_TOOLKITS=all
+
+```bash
+export COMPOSIO_API_KEY=...
+export COMPOSIO_TOOLKITS=all
+instinct init --name "Maria" --toolkits all
+instinct dev
+```
+
+`all` (or `*`) creates the Composio session without a toolkit allowlist. The owner
+can then say "connect Notion" or "hook up Linear" and the agent connects it, with
+no redeploy. `apps.json` records `"toolkits": ["*"]`.
+
+What changes in this mode:
+
+| | Explicit list | `all` |
+|---|---|---|
+| Session | `direct_tools` preset, one MCP tool per app action | Router: `COMPOSIO_SEARCH_TOOLS`, `COMPOSIO_MULTI_EXECUTE_TOOL`, `COMPOSIO_MANAGE_CONNECTIONS` |
+| How the model acts | Calls `app_gmail_send_email` directly | Searches for the action, then runs it through multi-execute |
+| Who may act | By tool: partner reads the calendar, friend checks free/busy | Owner only. The meta tools cost `apps.use` + `trust.manage` |
+| Connected apps on boot | Each configured toolkit, connected or not | Every toolkit with an active connection |
+| New app | Deployer adds the slug and restarts | Owner texts "connect X" |
+
+Composio cannot list every tool of every app directly, so `all` always runs in
+router mode even when `mode: "direct"` is set; the log says so. The trade is
+explicit: in `all` mode nobody but the owner can use apps, because the guard sees
+one multi-execute call and cannot tell a calendar read from a Stripe charge.
+Choose the explicit list when a partner's or a friend's agent should reach your
+calendar; choose `all` when you want every app at your fingertips and apps are
+yours alone.
+
+`apps_connect` works the same in both modes. In `all` mode any slug is accepted.
+`apps_list` shows the apps that hold a live connection.
 
 ## Limits
 
 | Limit | Detail |
 |---|---|
 | Owner connects apps | No other tier can connect, disconnect or manage connections. |
-| Unknown toolkits are owner-only | Add a row to `capabilities.ts` to open one to other tiers. |
+| Unknown toolkits are owner-only | Add a row to `capabilities.ts` to open one to other tiers. Sends, calendar writes and money moves in unknown toolkits carry a stricter tag as well. |
+| `all` mode is owner-only | Without an allowlist the session holds only the meta tools, so every app call is `apps.use` + `trust.manage`. |
+| Money moves ask | An app action tagged `purchase` has no known amount, so the spend policy asks the owner first. |
 | Multi-execute cannot be checked per tool | `COMPOSIO_MULTI_EXECUTE_TOOL` runs several tools in one call. The guard sees one capability. The default `direct` session mode leaves this tool out and lists each app action on its own. |
 | `router` mode is owner-only | In `router` mode the session holds only the meta tools, so every call costs `apps.use` + `trust.manage`. Choose it only for a toolkit list too large to list directly. |
 | Email and calendar content is data | The prompt tells the model that text inside an email or event is not an instruction. |
@@ -164,8 +232,10 @@ connections stay, because Composio stores them per user id, not per session.
 instinct status
 ```
 
-The status line lists the connected apps. The server log at boot prints
-`apps: <n> tools, connected: gmail, googlecalendar` or `connected: none`.
+The status line lists the connected apps, as does `apps: [...]` on the server's
+`/status` page. The server log at boot prints
+`apps: <n> tools, connected: gmail, googlecalendar` or `connected: none`, with
+`(any app by name)` added in `all` mode.
 
 Then text the agent: "what's on my calendar tomorrow". The model calls
 `app_googlecalendar_events_list`. The guard checks `calendar.read`. The owner has it.

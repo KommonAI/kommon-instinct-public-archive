@@ -110,6 +110,31 @@ export const HELP_GROUPS: HelpGroup[] = [
     ],
   },
   {
+    title: "Customize",
+    entries: [
+      {
+        name: "persona",
+        usage: 'persona show | edit | set "<text>" | reset | path',
+        summary: "Read or change <dataDir>/PERSONA.md: the agent's name, voice, texting style and limits.",
+        example: 'instinct persona set "You are Pip. Dry wit, short sentences, never emojis."',
+        flags: [
+          "show: print the persona in effect (the file, or the built-in default before one exists)",
+          "edit: open the file in $VISUAL or $EDITOR; without one, print the path",
+          "reset: write the built-in default back",
+          "config.json agent.persona (instinct init --agent-name sets the name) adds a one-line note on top of the file",
+          "AGENTS.md next to PERSONA.md adds standing instructions; see docs/CUSTOMIZE.md",
+        ],
+      },
+      {
+        name: "prompt",
+        usage: "prompt [--channel imessage|sms|email|chat|scheduled] [--layers] [--json] [--no-skills]",
+        summary: "Print the system prompt your own conversation would get right now, built from the data dir.",
+        example: "instinct prompt --layers",
+        flags: ["--layers: one row per section with its source file instead of the full text", "--json: the sections as JSON", "--no-skills: leave out the skills index"],
+      },
+    ],
+  },
+  {
     title: "Proactive",
     entries: [
       {
@@ -155,6 +180,7 @@ export function renderHelp(c: Palette, command?: string): string {
   }
   lines.push("Global: --data-dir <dir> (default $INSTINCT_DATA_DIR or ./.instinct), --help, --version");
   lines.push("");
-  lines.push("Env: INSTINCT_DATA_DIR, INKBOX_ADMIN_API_KEY, MARITIME_API_KEY, ANTHROPIC_API_KEY, COMPOSIO_API_KEY, COMPOSIO_TOOLKITS, LINK_CLIENT_ID");
+  lines.push("Env: INSTINCT_DATA_DIR, INKBOX_ADMIN_API_KEY, MARITIME_API_KEY, ANTHROPIC_API_KEY, COMPOSIO_API_KEY, COMPOSIO_TOOLKITS, LINK_CLIENT_ID, EDITOR");
+  lines.push("Customize the agent (persona, instructions, skills, memory, tiers): docs/CUSTOMIZE.md");
   return lines.join("\n");
 }

@@ -69,7 +69,7 @@ prints:
 
 ```
 Connect your iMessage
-  1. Text connect @maria-instinct to +1 650 484 9720
+  1. Text connect @maria-instinct to +1 415 555 0199
   2. A new thread from your Instinct appears. Say hi.
 ```
 

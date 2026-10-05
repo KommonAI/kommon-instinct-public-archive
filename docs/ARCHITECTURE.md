@@ -94,7 +94,7 @@ open-instinct/
     cli/       @open-instinct/cli       `instinct` command: init, connect, dev, chat, status, deploy, invite, trust, schedules, payments
   skills/      SKILL.md playbooks the agent loads (onboarding, scheduling, dining, travel, rides, email-triage, research, purchases, files, daily-brief, trusted-network, maritime-computer)
   examples/    local-chat.mjs, fake-inkbox-webhook.mjs, dinner-a2a.mjs (see examples/README.md)
-  deploy/      Dockerfile.agent, Dockerfile.gateway, docker-compose.yml, entrypoint.sh, .env.example, maritime-inkbox-signed-webhook.patch
+  deploy/      Dockerfile.agent, Dockerfile.gateway, docker-compose.yml, entrypoint.sh, .env.example
   .github/workflows/build-images.yml   builds and pushes both images to GHCR
 ```
 
@@ -196,12 +196,13 @@ policy engine checks. Groups:
 
 | Group | Tools | Source | Present when |
 |---|---|---|---|
-| messaging | `send_message` (reply on the current channel or to a contact: iMessage, SMS, email), `send_typing`, `react` | `@open-instinct/inkbox` | `INKBOX_API_KEY` and a handle are set |
+| messaging | `send_message` (reply on the current channel or to a contact: iMessage, SMS, email), `send_typing`, `react`, `send_file` (a workspace file as an attachment: iMessage and SMS up to 10 MB through the Inkbox media upload, email up to 25 MB; in the dashboard chat it returns a `maritime-file` block the dashboard renders as an attachment) | `@open-instinct/inkbox` | `INKBOX_API_KEY` and a handle are set; `send_file` is always present, chat-only without Inkbox |
 | owner | `ask_owner` (approval or question, with token), `notify_owner`, `audit_read` | `core` | always |
 | memory | `memory_read`, `memory_write`, `journal_append` | `core` | always |
 | schedule | `schedule_create`, `schedule_list`, `schedule_delete` | `core` | always |
 | web | `web_search`, `web_fetch` (public hosts only, no login) | `core` | always |
 | files | `read`, `write`, `edit`, `bash`, `ls`, `grep`, scoped to `workspace/` | `pi-coding-agent` factories wrapped by `server` | always, owner only |
+| files | `create_pdf` (markdown to a real PDF under `workspace/`: headings, lists, tables, code, links, page numbers) | `core` | always, owner only |
 | contacts and trust | `contacts_search`, `contacts_upsert`, `trust_set_tier`, `trust_grant`, `trust_revoke`, `trust_list` | `@open-instinct/network` | always |
 | network | `ask_instinct` (one contact, or several for a group plan), `reply_instinct`, `invite_to_network` | `@open-instinct/network` | always; A2A sends need Inkbox, invitations need `INKBOX_ADMIN_API_KEY` |
 | computer (in the VM) | `computer`, `computer_batch`, `request_takeover`, `takeover_status`, `computer_read_file`, `computer_write_file` | `@open-instinct/computer` over desktopd REST | `INSTINCT_COMPUTER` is `auto` or `desktopd` and desktopd answers |
@@ -264,8 +265,8 @@ amount. Card data never lands in `payments.json`, the audit log, the journal or 
    `ANTHROPIC_API_KEY`, `COMPOSIO_API_KEY`, `LINK_*`. Users text `connect @handle` to the Inkbox
    router number (or scan the QR) and are talking to their agent. Guide: [packages/gateway/README.md](../packages/gateway/README.md).
 2. **Maritime, one user.** `instinct deploy --image ...` does the same for you alone; no gateway.
-   Inkbox webhooks reach the agent through a Maritime signed-webhook address
-   (`deploy/maritime-inkbox-signed-webhook.patch`) or through a gateway you run yourself.
+   Inkbox webhooks reach the agent through a gateway you run yourself, or, once Maritime
+   supports Inkbox's signature scheme natively, through a Maritime signed-webhook address.
    Guide: [packages/cli/README.md](../packages/cli/README.md).
 3. **Self-hosted.** `instinct dev --tunnel` runs the server on your machine, opens the Inkbox
    tunnel for webhooks, and uses the hosted Computers MCP (or no computer).
@@ -279,6 +280,11 @@ The BYO contract the image must satisfy: bind `0.0.0.0:$PORT`, `GET /health` →
 Only `server`, `gateway` and `cli` read `process.env`. `config.json` wins over env after first
 boot; env seeds it. The annotated list is [deploy/.env.example](../deploy/.env.example).
 
+What the model is told is five files, not env: `PERSONA.md` (voice), `AGENTS.md` (standing
+instructions), `skills/`, `memory/MEMORY.md` and `policy.json`. `instinct prompt --layers`
+shows each section of the system prompt with the file that decides it; [CUSTOMIZE.md](CUSTOMIZE.md)
+says how to change each one.
+
 Server:
 
 | Variable | Meaning |
@@ -287,6 +293,7 @@ Server:
 | `INSTINCT_MODEL` | `provider/model`, default `anthropic/claude-fable-5-1`; `openai-compatible/<id>` uses `OPENAI_BASE_URL` |
 | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, ... | model access, looked up per Pi provider |
 | `INSTINCT_OWNER_NAME`, `INSTINCT_OWNER_PHONE`, `INSTINCT_OWNER_EMAIL`, `INSTINCT_OWNER_TIMEZONE`, `INSTINCT_AGENT_NAME` | who the owner is and what the agent is called; seeded into `config.json` on first boot |
+| `INSTINCT_PERSONA` | seeds `<data>/PERSONA.md` on first boot only; after that the file is the owner's (`instinct persona`) |
 | `INKBOX_API_KEY`, `INKBOX_AGENT_HANDLE`, `INKBOX_IDENTITY_ID` | identity-scoped Inkbox credentials; turn on the Inkbox outbox, messaging tools and A2A |
 | `INKBOX_SIGNING_KEY` | webhook signing key (also read from `secrets/webhook.json`) |
 | `INKBOX_ADMIN_API_KEY` | org-wide key: invitations, contact rules, webhook subscription with the tunnel |

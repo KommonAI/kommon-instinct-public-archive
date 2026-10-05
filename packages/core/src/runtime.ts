@@ -21,6 +21,7 @@ import type { MemoryStore } from "./memory.js";
 import { OwnerNotifier } from "./notifier.js";
 import { DEFAULT_TIER_TABLE, SPEND_CAPABILITIES, type PolicyEngine } from "./policy.js";
 import { normalizePhone, resolvePrincipal } from "./principal.js";
+import { readAgentsInstructions, readPersona } from "./persona.js";
 import { buildSystemPrompt, wrapUntrusted } from "./prompt.js";
 import type { Scheduler } from "./scheduler.js";
 import type { StateDir } from "./state.js";
@@ -637,7 +638,7 @@ export class AgentRuntime {
   // -------------------------------------------------------------------------
 
   private systemPromptFor(conv: Conversation): string {
-    const { config, memory, approvals, skillsPrompt, policy } = this.deps;
+    const { config, state, memory, approvals, skillsPrompt, policy } = this.deps;
     const principal = conv.principal;
     const tools = conv.agent.state.tools;
     const groups = new Set<string>();
@@ -658,6 +659,9 @@ export class AgentRuntime {
       capabilities: [...capabilities],
       toolGroups: [...groups],
       memoryDigest: this.memoryDigestFor(principal),
+      // Read fresh each time so `instinct persona set` applies on the next message.
+      persona: readPersona(state),
+      instructions: readAgentsInstructions(state),
       skillsPrompt,
       pendingApprovals: pending,
       extra,

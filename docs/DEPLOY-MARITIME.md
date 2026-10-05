@@ -73,7 +73,7 @@ cp deploy/.env.example deploy/.env   # fill it in
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-The agent image sets no `PORT`. Maritime injects `PORT=18789`. Docker Compose sets `PORT=8080`. The server binds whatever it is given. Do not set `PORT=8080` inside a Maritime VM; the guest port forwarder owns that port.
+The agent image sets no `PORT`. Maritime injects `PORT=18789`. Docker Compose sets `PORT=8080`. The server binds whatever it is given. Do not set `PORT=8080` inside a Maritime VM; that port is reserved there.
 
 ## One user: `instinct deploy`
 
@@ -200,35 +200,20 @@ Maritime wakes the VM and posts to the agent's `/chat`. The server sees the `@@i
 
 For a single user without the gateway, the fallback is `instinct dev --tunnel` on your own machine. That runs the server locally and skips the Maritime VM.
 
-### 2. Zero relay: the `inkbox_v1` signed-webhook patch
+### 2. Zero relay: a native signed webhook (possible future platform feature)
 
-Maritime has a signed-webhook feature. An agent gets one public address, `https://api.maritime.sh/w/{agentId}/{path}`. Maritime checks the signature before it touches the agent, wakes the VM, and forwards the exact bytes to `/{path}` on the agent's port. Today it knows one scheme, `spectrum_v0`.
+Maritime has a signed-webhook feature. An agent gets one public address, `https://api.maritime.sh/w/{agentId}/{path}`. Maritime checks the signature before it touches the agent, wakes the VM, and forwards the exact bytes to `/{path}` on the agent's port. The public API (`PUT /api/agents/{id}/signed-webhook` with `path`, `scheme` and `secret`) currently accepts one signature scheme, and it is not Inkbox's.
 
-[deploy/maritime-inkbox-signed-webhook.patch](../deploy/maritime-inkbox-signed-webhook.patch) adds a second scheme, `inkbox_v1`. In six lines:
+If Maritime adds a scheme that verifies Inkbox's headers (`X-Inkbox-Signature` as HMAC-SHA256 over `X-Inkbox-Request-ID + "." + X-Inkbox-Timestamp + "." + raw body`, with a replay window), the gateway becomes optional for a single user. The agent server already verifies that signature on `POST /webhooks/inkbox` and answers `204`, so no change to this repository is needed when the platform supports it. The steps would be:
 
-1. It adds `inkbox_v1` to `SUPPORTED_SCHEMES` in `backend/app/signed_webhooks/signatures.py`.
-2. It verifies `X-Inkbox-Signature: sha256=<hex>` as HMAC-SHA256 over `X-Inkbox-Request-ID + "." + X-Inkbox-Timestamp + "." + raw body`, with the identity's signing key.
-3. It strips the cosmetic `whsec_` prefix from the key and refuses timestamps more than 5 minutes old.
-4. It replaces the hard-coded `verify_spectrum_v0` call in `router.py` with `verify_delivery(scheme, ...)`, which dispatches on the stored scheme and never verifies an unknown one.
-5. It adds `backend/tests/test_signed_webhooks_inkbox.py` with the documented construction, a valid delivery, tampered headers, a wrong key, the replay window and an unknown scheme.
-6. It changes no schema, no table and no route. The `scheme` column already exists.
+1. Register the agent's webhook route with Maritime. The secret is the Inkbox signing key from `<dataDir>/secrets/inkbox.json`, the same value the agent holds as `INKBOX_SIGNING_KEY`. The key needs the `secrets` scope.
+2. Subscribe the Inkbox identity's webhooks to the returned `url` (`POST /api/v1/webhooks/subscriptions` with `url`, `event_types` and `agent_identity_id`, using the admin key).
 
-The patch applies cleanly to the Maritime repository (`git apply --check` passes against `main` as of 2026-10-03).
-
-After it ships, point Maritime at the agent's own webhook route. The secret is the Inkbox signing key from `<dataDir>/secrets/inkbox.json`, the same value the agent holds as `INKBOX_SIGNING_KEY`. The key needs the `secrets` scope.
-
-```bash
-curl -X PUT "https://api.maritime.sh/api/agents/$AGENT_ID/signed-webhook" \
-  -H "Authorization: Bearer $MARITIME_API_KEY" -H "Content-Type: application/json" \
-  -d '{"path": "webhooks/inkbox", "scheme": "inkbox_v1", "secret": "<signing key>"}'
-# -> {"path": "webhooks/inkbox", "scheme": "inkbox_v1", "url": "https://api.maritime.sh/w/<agentId>/webhooks/inkbox"}
-```
-
-Then subscribe the Inkbox identity's webhooks to that `url` (`POST /api/v1/webhooks/subscriptions` with `url`, `event_types` and `agent_identity_id`, using the admin key). Inkbox now posts straight to Maritime. Maritime verifies, wakes, and forwards to the agent's `POST /webhooks/inkbox`, which verifies the same signature a second time and answers `204`. No gateway, no `users.json`, no relay process.
+Inkbox would then post straight to Maritime. Maritime verifies, wakes, and forwards to the agent's `POST /webhooks/inkbox`, which verifies the same signature a second time. No gateway, no `users.json`, no relay process. Until then, use the gateway relay or `instinct dev --tunnel`.
 
 | | Gateway relay | Signed webhook |
 |---|---|---|
-| Works today | yes | after the patch ships |
+| Works today | yes | when the platform supports Inkbox's scheme |
 | Extra service to run | yes | no |
 | Who verifies the signature | gateway, then the agent trusts the envelope | Maritime, then the agent again |
 | Signup and connect pages | yes | no; use `instinct init` and `instinct connect` |
@@ -242,10 +227,10 @@ Then subscribe the Inkbox identity's webhooks to that `url` (`POST /api/v1/webho
 | VM size without a desktop | Maritime's agent default (2 GiB) | `--no-desktop` |
 | Seat plan | A computer or desktop agent takes one slot of a paid seat plan. Confirm the plan before the first screen action; an unentitled account gets `402 no_plan`. | Maritime billing |
 | Idle TTL | 900 seconds by default. `0` means always on and always billed. | `--idle`, `INSTINCT_IDLE_TTL_SECONDS` |
-| Wake time | About 1 to 3 seconds from snapshot | Maritime signed-webhook docs |
+| Wake time | About 1 to 3 seconds from snapshot | Maritime docs |
 | Reply budget | Maritime waits 30 s for `POST /chat`. The server answers within `INSTINCT_REPLY_BUDGET_MS` (default 20 s) and finishes long work in the background, sending the final text through Inkbox. | `@open-instinct/server` |
 | Agent creation | 30 creates per minute per key. Each create debits the Maritime wallet; a `402` shows the server's explanation. | Maritime agents API |
-| Metered LLM proxy | Default budget $5 per user when `useMaritimeLlm` is on; adjustable in Maritime | Maritime LLM proxy |
+| Metered LLM proxy | A per-user spend budget applies when `useMaritimeLlm` is on. Raise it with the LLM spend limit in Maritime. | Maritime LLM proxy |
 | Gateway signup caps | 5 accepted signups per client address per 10 minutes; at most 20 users provisioning or created in the last hour | gateway |
 | Inkbox plan | Free: 3 identities, shared router, 2,000 iMessages a month, 3 unique recipients. Developer: 10 identities, 10 recipients. Startup: 100 identities, 100 recipients. The "unique recipients" cap bounds how many humans one deployment can text. | inkbox.ai/pricing |
 | Webhook body | 1 MiB on Maritime's signed-webhook route and on the agent server | both |
@@ -258,7 +243,7 @@ Then subscribe the Inkbox identity's webhooks to that `url` (`POST /api/v1/webho
 | `instinct deploy` returns `401` or `403` | The `mk_` key lacks `provision` or `deploy` | Mint a key with `provision`, `deploy`, `secrets`, or `manage`. |
 | Agent never becomes healthy | The server bound the wrong port | Do not set `PORT` by hand in the agent env. Maritime injects `18789`. Check the agent logs in the dashboard. |
 | `/chat` through Maritime times out | A long tool run or a slow first wake | The server acks within 20 s and finishes in the background. Lower `INSTINCT_REPLY_BUDGET_MS` if replies still miss the 30 s window. |
-| iMessage reaches Inkbox but the agent is silent | No webhook subscription points at a reachable URL | Run the gateway, use `instinct dev --tunnel`, or set the signed webhook once the patch ships. Check Inkbox's delivery log for `401` or `404`. |
+| iMessage reaches Inkbox but the agent is silent | No webhook subscription points at a reachable URL | Run the gateway or use `instinct dev --tunnel`. Check Inkbox's delivery log for `401` or `404`. |
 | Gateway returns `401` on `/webhooks/inkbox/:userId` | Signature mismatch; the stored signing key is not the one Inkbox uses | Compare the key in `users.json` with the identity's key in Inkbox. Rotate with `InkboxProvisioner.createSigningKey` if needed. |
 | Gateway returns `404` on `/webhooks/inkbox/:userId` | Unknown user id, often after a redeploy without the volume | Mount `GATEWAY_DATA_DIR` on a persistent volume. |
 | Gateway refuses to start | `INKBOX_ADMIN_API_KEY` is set but `GATEWAY_SIGNUP_SECRET` is not | Set an invite code, or set `GATEWAY_ALLOW_OPEN_SIGNUP=1` on purpose. |

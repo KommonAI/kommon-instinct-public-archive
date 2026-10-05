@@ -1,6 +1,6 @@
 ---
 name: research
-description: Look something up properly and report back. Use when the owner asks a question that needs more than memory, wants options compared, asks "find out about", "what's the best", "is it true that", or needs a short brief with sources. Uses web_search and web_fetch first, the computer for pages that need a real browser, writes a short brief with sources, and saves long outputs to the workspace.
+description: Look something up properly and report back. Use when the owner asks a question that needs more than memory, wants options compared, asks "find out about", "what's the best", "is it true that", or needs a short brief with sources. Uses web_search and web_fetch first, the computer for pages that need a real browser, writes a short brief with sources, saves long outputs to the workspace, and sends the full write-up as a PDF when asked.
 ---
 
 # Research
@@ -57,9 +57,25 @@ When the material is more than fits in a text, write it with the `write` tool to
 - Sources: title, URL, date accessed, one line on why it is credible.
 - Open questions.
 
-Share the path in the brief through `send_message`. If the owner is on the
-Maritime dashboard, they can open the file there; otherwise offer to text the
-section they want.
+Share the path in the brief through `send_message` and offer the PDF. If the
+owner is on the Maritime dashboard, they can open the file there.
+
+## Send it as a PDF
+
+When the owner says "send me that as a PDF", "can I get the full thing", or the
+brief is clearly too long for a text:
+
+1. `create_pdf` with the same markdown you saved (or the saved file, `read`
+   first), `path: research/<yyyy-mm-dd>-<slug>.pdf`, `title` set to the
+   question in a few words. The tool reports the page count.
+2. `send_file` with that path and `caption: "Here is the brief as a PDF."`.
+   With no `to`, it lands in the current conversation as an attachment.
+3. Over a few pages (or over a few MB): send by email instead, `send_file`
+   with `channel: "email"`, `to: "owner"` and a `subject`, and tell them in
+   the text: "Emailed you the full brief, 7 pages with links."
+
+Agent: Here is the brief as a PDF. (send_file research/2026-10-03-snapmaker-
+u1-vs-bambu.pdf, 2 pages, in the current iMessage thread)
 
 ## Depth levels
 
@@ -83,3 +99,4 @@ path.
 - Do not cite a page you did not fetch.
 - Do not invent numbers. If you could not find one, say so.
 - Do not research other people's private details on anyone's behalf.
+- Do not text a wall of findings; the long version is a file or a PDF.

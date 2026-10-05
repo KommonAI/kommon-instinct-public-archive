@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContactStore, StateDir, defaultConfig, type InstinctConfig, type OutboundMessage, type Principal, type ToolContext } from "@open-instinct/core";
-import type { InkboxChannel } from "../src/channel.js";
-import { messagingTools, resolveTarget } from "../src/tools.js";
+import type { FileSend, InkboxChannel } from "../src/channel.js";
+import { messagingTools, resolveTarget, sendFileTool, type MessagingDeps } from "../src/tools.js";
 
 let dir: string;
 let contacts: ContactStore;
@@ -129,5 +129,143 @@ describe("send_typing and react", () => {
     expect(channel.typing).toHaveBeenCalledWith("imessage:conv_1");
     await tool("react").execute({ messageId: "msg_1", reaction: "love" }, ctxFor(friend, "imessage:conv_1"));
     expect(channel.react).toHaveBeenCalledWith("imessage:conv_1", "msg_1", "love");
+  });
+});
+
+describe("send_file", () => {
+  const PDF = Buffer.from("%PDF-1.4\n%test\n");
+  let sentFiles: Array<{ file: FileSend; ctx: { principal: Principal; conversationKey: string } }>;
+  let dataDir: string;
+  let workspace: string;
+
+  beforeEach(() => {
+    sentFiles = [];
+    dataDir = realpathSync(dir);
+    workspace = join(dataDir, "workspace");
+    mkdirSync(join(workspace, "research"), { recursive: true });
+    writeFileSync(join(workspace, "research", "brief.pdf"), PDF);
+    writeFileSync(join(dataDir, "inbox", "photo.jpg"), Buffer.from([0xff, 0xd8]));
+    (channel as unknown as { sendFile: unknown }).sendFile = vi.fn(async (file: FileSend, ctx: { principal: Principal; conversationKey: string }) => {
+      sentFiles.push({ file, ctx });
+      return { channel: file.channel };
+    });
+  });
+
+  function fileTool(extra: Partial<MessagingDeps> = {}) {
+    const t = messagingTools({ channel, contacts, config, dataDir, ...extra }).find((x) => x.spec.name === "send_file");
+    if (!t) throw new Error("missing send_file");
+    return t.spec;
+  }
+  const text = (r: Awaited<ReturnType<ReturnType<typeof fileTool>["execute"]>>) => (typeof r === "string" ? r : r.content.map((c) => (c.type === "text" ? c.text : "")).join(""));
+
+  it("is tagged converse plus files.read in the messaging group", () => {
+    expect(fileTool().meta).toMatchObject({ capabilities: ["converse", "files.read"], group: "messaging" });
+    expect(fileTool().meta.describe?.({ path: "research/brief.pdf" })).toBe("send_file research/brief.pdf to current conversation");
+  });
+
+  it("sends a workspace-relative file in the current iMessage conversation with the caption", async () => {
+    const r = await fileTool().execute({ path: "research/brief.pdf", caption: "Here is the brief as a PDF." }, ctxFor(owner, "imessage:conv_1"));
+    expect(text(r)).toBe("Sent brief.pdf in the current imessage conversation.");
+    expect(sentFiles).toHaveLength(1);
+    expect(sentFiles[0]?.file).toEqual({ channel: "imessage", conversationKey: "imessage:conv_1", filename: "brief.pdf", contentType: "application/pdf", content: PDF, caption: "Here is the brief as a PDF." });
+    expect(sentFiles[0]?.ctx).toEqual({ principal: owner, conversationKey: "imessage:conv_1" });
+  });
+
+  it("emails a contact with subject and caption, and defaults the subject for new threads", async () => {
+    const t = fileTool();
+    await t.execute({ path: "research/brief.pdf", to: "priya-patel", caption: "As promised.", subject: "Research brief" }, ctxFor(owner, "chat:cli"));
+    expect(sentFiles[0]?.file).toEqual({ channel: "email", to: "priya@example.com", filename: "brief.pdf", contentType: "application/pdf", content: PDF, caption: "As promised.", subject: "Research brief" });
+    await t.execute({ path: "research/brief.pdf", to: "owner", channel: "email" }, ctxFor(owner, "chat:cli"));
+    expect(sentFiles[1]?.file).toMatchObject({ channel: "email", to: "maria@example.com", subject: "brief.pdf from your Instinct" });
+    expect(sentFiles[1]?.file.caption).toBeUndefined();
+    await t.execute({ path: "research/brief.pdf", to: "sam-lee", channel: "sms" }, ctxFor(owner, "chat:cli"));
+    expect(sentFiles[2]?.file).toMatchObject({ channel: "sms", to: "+14155550100" });
+    expect(sentFiles[2]?.file.subject).toBeUndefined();
+  });
+
+  it("returns a maritime-file fence for dashboard chat instead of sending", async () => {
+    const r = await fileTool().execute({ path: "research/brief.pdf", caption: "Here is the brief as a PDF.", subject: "Research brief" }, ctxFor(owner, "chat:dashboard"));
+    const out = text(r);
+    expect(sentFiles).toHaveLength(0);
+    const m = /```maritime-file\n(.*)\n```/.exec(out);
+    expect(m).not.toBeNull();
+    expect(JSON.parse(m![1]!)).toEqual({ path: join(workspace, "research", "brief.pdf"), name: "brief.pdf", size: PDF.length, mime: "application/pdf", title: "Research brief", message: "Here is the brief as a PDF." });
+    expect(out.startsWith(join(workspace, "research", "brief.pdf"))).toBe(true);
+    const plain = await fileTool().execute({ path: "research/brief.pdf" }, ctxFor(owner, "chat:cli"));
+    expect(JSON.parse(/```maritime-file\n(.*)\n```/.exec(text(plain))![1]!)).toEqual({ path: join(workspace, "research", "brief.pdf"), name: "brief.pdf", size: PDF.length, mime: "application/pdf" });
+  });
+
+  it("lets a non-owner send only into their own conversation or to the owner", async () => {
+    const t = fileTool();
+    await expect(t.execute({ path: "research/brief.pdf", to: "priya-patel" }, ctxFor(friend, "imessage:conv_sam"))).rejects.toThrow(/may only send files here/);
+    await expect(t.execute({ path: "research/brief.pdf", to: "+16505550001" }, ctxFor(friend, "imessage:conv_sam"))).rejects.toThrow(/may only send files here/);
+    expect(sentFiles).toHaveLength(0);
+    await t.execute({ path: "research/brief.pdf" }, ctxFor(friend, "imessage:conv_sam"));
+    expect(sentFiles[0]?.file).toMatchObject({ channel: "imessage", conversationKey: "imessage:conv_sam", filename: "brief.pdf" });
+    await t.execute({ path: "research/brief.pdf", to: "owner", caption: "for Maria" }, ctxFor(friend, "imessage:conv_sam"));
+    expect(sentFiles[1]?.file).toMatchObject({ channel: "imessage", to: "+14155550000", caption: "From Sam Lee: for Maria" });
+    await t.execute({ path: "research/brief.pdf", to: "owner", channel: "email" }, ctxFor(friend, "imessage:conv_sam"));
+    expect(sentFiles[2]?.file).toMatchObject({ channel: "email", to: "maria@example.com", subject: "File from Sam Lee", caption: "From Sam Lee: brief.pdf" });
+  });
+
+  it("accepts absolute paths under the data dir and refuses everything outside it", async () => {
+    const t = fileTool();
+    await t.execute({ path: join(dataDir, "inbox", "photo.jpg") }, ctxFor(owner, "imessage:conv_1"));
+    expect(sentFiles[0]?.file).toMatchObject({ filename: "photo.jpg", contentType: "image/jpeg" });
+    const outside = mkdtempSync(join(tmpdir(), "inkbox-outside-"));
+    writeFileSync(join(outside, "secret.txt"), "x");
+    try {
+      for (const bad of ["../../" + basename(outside) + "/secret.txt", join(outside, "secret.txt"), "../memory/MEMORY.md", "/etc/hosts"]) {
+        const r = await t.execute({ path: bad }, ctxFor(owner, "imessage:conv_1"));
+        expect(typeof r === "object" && r.isError, bad).toBe(true);
+        expect(text(r), bad).toMatch(/outside the data directory|no file at/);
+      }
+      // A symlink inside the workspace pointing outside is followed and refused.
+      symlinkSync(join(outside, "secret.txt"), join(workspace, "link.txt"));
+      const viaLink = await t.execute({ path: "link.txt" }, ctxFor(owner, "imessage:conv_1"));
+      expect(text(viaLink)).toMatch(/outside the data directory/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+    const missing = await t.execute({ path: "research/nope.pdf" }, ctxFor(owner, "imessage:conv_1"));
+    expect(text(missing)).toMatch(/no file at research\/nope\.pdf/);
+    const folder = await t.execute({ path: "research" }, ctxFor(owner, "imessage:conv_1"));
+    expect(text(folder)).toMatch(/not a file/);
+    expect(sentFiles).toHaveLength(1);
+    const unconfigured = await fileTool({ dataDir: undefined }).execute({ path: "research/brief.pdf" }, ctxFor(owner, "imessage:conv_1"));
+    expect(text(unconfigured)).toMatch(/not configured/);
+  });
+
+  it("works without a channel: the dashboard chat still gets the file, wires are refused", async () => {
+    const alone = sendFileTool({ contacts, config, dataDir }).spec;
+    expect(alone.name).toBe("send_file");
+    const chat = await alone.execute({ path: "research/brief.pdf", caption: "Here it is." }, ctxFor(owner, "chat:default"));
+    expect(text(chat)).toContain("```maritime-file");
+    expect(text(chat)).toContain(join(workspace, "research", "brief.pdf"));
+    await expect(alone.execute({ path: "research/brief.pdf" }, ctxFor(owner, "imessage:conv_1"))).rejects.toThrow(/Inkbox is not configured/);
+    await expect(alone.execute({ path: "research/brief.pdf", to: "owner" }, ctxFor(owner, "chat:default"))).rejects.toThrow(/Inkbox is not configured/);
+    expect(sentFiles).toHaveLength(0);
+  });
+
+  it("refuses to send on a2a or unknown threads without `to`", async () => {
+    const t = fileTool();
+    await expect(t.execute({ path: "research/brief.pdf" }, ctxFor(friend, "a2a:ctx_1"))).rejects.toThrow(/agent-to-agent/);
+    await expect(t.execute({ path: "research/brief.pdf" }, ctxFor(owner, "scheduled:job_1"))).rejects.toThrow(/Give `to`/);
+    expect(sentFiles).toHaveLength(0);
+  });
+
+  it("passes the size guard to the channel: a file over 10 MiB is rejected by sendFile, not read twice", async () => {
+    // The real channel enforces the cap; the tool hands it the bytes and surfaces the error.
+    const big = join(workspace, "big.bin");
+    writeFileSync(big, "");
+    truncateSync(big, 10 * 1024 * 1024 + 1);
+    (channel as unknown as { sendFile: unknown }).sendFile = vi.fn(async (file: FileSend) => {
+      if (file.channel !== "email" && file.content.length > 10 * 1024 * 1024) throw new Error("big.bin is 10.0 MiB; iMessage attachments are capped at 10.0 MiB. Send it by email instead.");
+      sentFiles.push({ file, ctx: { principal: owner, conversationKey: "x" } });
+      return { channel: file.channel };
+    });
+    await expect(fileTool().execute({ path: "big.bin" }, ctxFor(owner, "imessage:conv_1"))).rejects.toThrow(/capped at 10\.0 MiB/);
+    await fileTool().execute({ path: "big.bin", to: "owner", channel: "email" }, ctxFor(owner, "imessage:conv_1"));
+    expect(sentFiles[0]?.file.content.length).toBe(10 * 1024 * 1024 + 1);
   });
 });

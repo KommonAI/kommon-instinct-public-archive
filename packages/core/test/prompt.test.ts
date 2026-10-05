@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildSystemPrompt, wrapUntrusted, type PromptInput } from "../src/prompt.js";
+import { DEFAULT_PERSONA } from "../src/persona.js";
+import { PROMPT_SOURCES, buildSystemPrompt, describePromptLayers, wrapUntrusted, type PromptInput } from "../src/prompt.js";
 import type { Approval } from "../src/types.js";
 import { principalOf, testConfig } from "./helpers.js";
 
@@ -83,11 +84,56 @@ describe("buildSystemPrompt", () => {
     expect(p.endsWith("You have a desktop.")).toBe(true);
   });
 
-  it("uses a custom persona and falls back to a default one", () => {
+  it("uses PERSONA.md as the identity, the built-in default without it, and config.agent.persona as a one-line note", () => {
+    const bare = buildSystemPrompt(input());
+    expect(bare).toContain("## Voice");
+    expect(bare).toContain("Say less. Do more.");
+    expect(bare).not.toContain("Persona:");
+
+    const fromFile = buildSystemPrompt(input({ persona: "# Pip\n\nDry wit. Short sentences. Signs off with a dot." }));
+    expect(fromFile).toContain("## Pip");
+    expect(fromFile).toContain("Dry wit. Short sentences.");
+    expect(fromFile).not.toContain("Say less. Do more.");
+    // The persona sits inside the identity section, before the owner card.
+    expect(fromFile.indexOf("Dry wit")).toBeGreaterThan(fromFile.indexOf("# You are Instinct"));
+    expect(fromFile.indexOf("Dry wit")).toBeLessThan(fromFile.indexOf("# Your owner"));
+
     const cfg = testConfig();
     cfg.agent.persona = "Dry wit, short sentences.";
-    expect(buildSystemPrompt(input({ config: cfg }))).toContain("Persona: Dry wit, short sentences.");
-    expect(buildSystemPrompt(input())).toContain("Persona: warm, direct");
+    const withNote = buildSystemPrompt(input({ config: cfg, persona: "Warm and chatty." }));
+    expect(withNote).toContain("Warm and chatty.");
+    expect(withNote).toContain("Persona: Dry wit, short sentences.");
+    expect(withNote.indexOf("Persona: Dry wit")).toBeGreaterThan(withNote.indexOf("Warm and chatty."));
+    expect(withNote.indexOf("Persona: Dry wit")).toBeLessThan(withNote.indexOf("# Your owner"));
+    // A blank file falls back to the default.
+    expect(buildSystemPrompt(input({ persona: "   " }))).toContain("Say less. Do more.");
+  });
+
+  it("appends AGENTS.md as standing instructions right after the identity", () => {
+    const p = buildSystemPrompt(input({ instructions: "# House rules\nAlways confirm bookings by text." }));
+    expect(p).toContain("# Standing instructions\n## House rules\nAlways confirm bookings by text.");
+    expect(p.indexOf("# Standing instructions")).toBeGreaterThan(p.indexOf("# You are Instinct"));
+    expect(p.indexOf("# Standing instructions")).toBeLessThan(p.indexOf("# Your owner"));
+    expect(buildSystemPrompt(input({ instructions: "  " }))).not.toContain("# Standing instructions");
+  });
+
+  it("describePromptLayers lists the sections in prompt order with their sources", () => {
+    const layers = describePromptLayers(input({ instructions: "Be brief.", skillsPrompt: "## dining", extra: ["# Network\nPeers.", " "] }));
+    expect(layers.map((l) => l.id)).toEqual(["identity", "instructions", "owner", "principal", "channel", "rules", "memory", "skills", "long-tasks", "now", "extra"]);
+    expect(layers.map((l) => l.text).join("\n\n")).toBe(buildSystemPrompt(input({ instructions: "Be brief.", skillsPrompt: "## dining", extra: ["# Network\nPeers.", " "] })));
+    const byId = Object.fromEntries(layers.map((l) => [l.id, l]));
+    expect(byId.identity!.source).toBe(PROMPT_SOURCES.personaDefault);
+    expect(byId.instructions!.source).toBe(PROMPT_SOURCES.instructions);
+    expect(byId.memory!.source).toContain("MEMORY.md");
+    expect(byId.skills!.source).toContain("skills/");
+    expect(byId.extra!.text).toBe("# Network\nPeers.");
+
+    const cfg = testConfig();
+    cfg.agent.persona = "Terse.";
+    const custom = describePromptLayers(input({ config: cfg, persona: DEFAULT_PERSONA }));
+    expect(custom[0]!.source).toBe(`${PROMPT_SOURCES.personaFile}, plus ${PROMPT_SOURCES.personaConfig}`);
+    // Empty layers are left out rather than listed blank.
+    expect(describePromptLayers(input({ memoryDigest: "" })).some((l) => l.id === "memory")).toBe(false);
   });
 });
 

@@ -1,16 +1,19 @@
 /**
- * Tools that ship with core: memory, schedules, owner relay, audit, and plain web access.
- * Messaging, contacts, computer and apps live in their own packages.
+ * Tools that ship with core: memory, schedules, owner relay, audit, plain web access,
+ * and PDF creation. Messaging, contacts, computer and apps live in their own packages.
  */
+import fs from "node:fs";
+import path from "node:path";
 import { Type } from "typebox";
 import type { ApprovalStore } from "./approvals.js";
 import type { AuditLog } from "./audit.js";
 import type { MemoryStore } from "./memory.js";
 import { checkPublicTarget, type Lookup } from "./net-guard.js";
+import { pdfPageCount, renderMarkdownToPdf } from "./pdf.js";
 import { wrapUntrusted } from "./prompt.js";
 import type { Outbox } from "./runtime.js";
 import type { Scheduler } from "./scheduler.js";
-import { defineTool, textResult, type RegisteredTool, type ToolContext } from "./tools.js";
+import { defineTool, textResult, type RegisteredTool, type ToolContext, type ToolResultLike } from "./tools.js";
 import type { AuditKind, InstinctConfig } from "./types.js";
 
 export interface CoreToolDeps {
@@ -24,6 +27,8 @@ export interface CoreToolDeps {
   /** DNS lookup used to vet web_fetch targets; tests inject a stub. */
   lookup?: Lookup;
   searchApiKey?: string;
+  /** The owner's workspace directory. create_pdf writes under it; without it the tool refuses. */
+  workspaceDir?: string;
 }
 
 const WEB_TEXT_CAP = 20_000;
@@ -41,6 +46,7 @@ export function coreTools(deps: CoreToolDeps): RegisteredTool[] {
     auditTool(deps),
     webFetchTool(deps),
     webSearchTool(deps),
+    createPdfTool(deps),
   ];
 }
 
@@ -456,6 +462,67 @@ function decodeEntities(text: string): string {
 
 function safeChar(code: number): string {
   return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : "";
+}
+
+// ---------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a workspace-relative (or absolute, inside the workspace) path lands as a
+ * canonical absolute path, or undefined when it escapes the workspace. A symlinked
+ * workspace is accepted under either its given or its real path.
+ */
+export function resolveWorkspacePath(workspaceDir: string, requested: string): string | undefined {
+  if (!requested || requested.includes("\0")) return undefined;
+  const rawRoot = path.resolve(workspaceDir);
+  let realRoot = rawRoot;
+  try {
+    realRoot = fs.realpathSync(rawRoot);
+  } catch {
+    // The workspace may not exist yet; the given root still bounds the check.
+  }
+  const inside = (root: string, target: string) => target !== root && target.startsWith(root + path.sep);
+  const target = path.resolve(rawRoot, requested);
+  if (inside(rawRoot, target)) return path.join(realRoot, path.relative(rawRoot, target));
+  if (inside(realRoot, target)) return target;
+  return undefined;
+}
+
+function createPdfTool({ workspaceDir, config }: CoreToolDeps): RegisteredTool {
+  return defineTool({
+    name: "create_pdf",
+    label: "Create PDF",
+    description:
+      "Write a PDF into the workspace from markdown (headings, paragraphs, lists, bold, code blocks, pipe tables). Returns the absolute path, size and page count. Send it afterwards with send_file.",
+    parameters: Type.Object({
+      path: Type.String({ description: "Where to write, relative to the workspace, ending in .pdf, e.g. research/2026-10-03-brief.pdf" }),
+      markdown: Type.String({ description: "The document body in markdown" }),
+      title: Type.Optional(Type.String({ description: "Title printed at the top and stored in the PDF metadata" })),
+    }),
+    meta: { capabilities: ["files.write"], group: "files", describe: (a) => `create_pdf ${argText(a, "path")}` },
+    execute: async ({ path: requested, markdown, title }) => {
+      if (!workspaceDir) return fail("No workspace is configured, so PDFs cannot be written.");
+      if (!/\.pdf$/i.test(requested.trim())) return fail(`The path must end in .pdf: ${requested}`);
+      const target = resolveWorkspacePath(workspaceDir, requested.trim());
+      if (!target) return fail(`Refused: "${requested}" is outside the workspace.`);
+      const pdf = await renderMarkdownToPdf(markdown, { ...(title ? { title } : {}), author: config.agent.name });
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, pdf);
+      const pages = pdfPageCount(pdf);
+      return { content: [{ type: "text", text: `Wrote ${target} (${formatBytes(pdf.length)}, ${pages} page${pages === 1 ? "" : "s"}).` }], details: { path: target, bytes: pdf.length, pages } };
+    },
+  });
+}
+
+function fail(text: string): ToolResultLike {
+  return { content: [{ type: "text", text }], isError: true };
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function clip(text: string, max: number): string {

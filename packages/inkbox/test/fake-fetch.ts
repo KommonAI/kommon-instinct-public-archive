@@ -9,6 +9,8 @@ export interface Recorded {
   query: Record<string, string>;
   headers: Record<string, string>;
   body: unknown;
+  /** Multipart parts when the body was a FormData: field, filename, type and size. */
+  form?: Array<{ field: string; filename: string; type: string; size: number }>;
 }
 
 export interface Answer {
@@ -36,6 +38,13 @@ export function fakeFetch(routes: Record<string, Responder | Answer>, fallback?:
       headers,
       body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
     };
+    if (init?.body instanceof FormData) {
+      rec.form = [];
+      for (const [field, value] of init.body.entries()) {
+        if (value instanceof Blob) rec.form.push({ field, filename: value instanceof File ? value.name : "", type: value.type, size: value.size });
+        else rec.form.push({ field, filename: "", type: "text", size: value.length });
+      }
+    }
     calls.push(rec);
     const key = `${rec.method} ${rec.path}`;
     const route = routes[key];

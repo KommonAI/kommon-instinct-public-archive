@@ -13,6 +13,8 @@ import { runDev } from "./commands/dev.js";
 import { runInit } from "./commands/init.js";
 import { runInvite } from "./commands/invite.js";
 import { runPayments } from "./commands/payments.js";
+import { runPersona } from "./commands/persona.js";
+import { runPrompt } from "./commands/prompt.js";
 import { runSchedules } from "./commands/schedules.js";
 import { runStatus } from "./commands/status.js";
 import { runTrust } from "./commands/trust.js";
@@ -32,6 +34,8 @@ const COMMANDS: Record<string, Command> = {
   trust: runTrust,
   schedules: runSchedules,
   payments: runPayments,
+  persona: runPersona,
+  prompt: runPrompt,
 };
 
 export const COMMAND_NAMES: readonly string[] = Object.keys(COMMANDS);

@@ -18,16 +18,17 @@ import {
   StateDir,
   ToolRegistry,
   coreTools,
+  ensurePersona,
   loadConfig,
   loadPolicy,
   resolveDataDir,
   resolveModel,
 } from "@open-instinct/core";
 import type { InstinctConfig, Outbox, RegisteredTool } from "@open-instinct/core";
-import { InkboxA2A, InkboxChannel, InkboxProvisioner, messagingTools } from "@open-instinct/inkbox";
+import { InkboxA2A, InkboxChannel, InkboxProvisioner, messagingTools, sendFileTool } from "@open-instinct/inkbox";
 import { computerGuidance, detectComputer } from "@open-instinct/computer";
 import type { ComputerBackend } from "@open-instinct/computer";
-import { ComposioApps, DEFAULT_TOOLKITS, appsGuidance } from "@open-instinct/apps";
+import { ComposioApps, DEFAULT_TOOLKITS, appsGuidance, appsTools } from "@open-instinct/apps";
 import { networkTools } from "@open-instinct/network";
 import { ChatAwareOutbox, ConsoleOutbox, type ChatReplyBuffer } from "./console-outbox.js";
 import { fileTools } from "./file-tools.js";
@@ -76,6 +77,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const state = new StateDir(resolveDataDir(env));
   state.ensure();
   const config = loadConfig(state, env);
+  // PERSONA.md is the owner's file; INSTINCT_PERSONA seeds it on first boot only.
+  if (ensurePersona(state, env.INSTINCT_PERSONA)) log(`wrote ${state.path("PERSONA.md")}${env.INSTINCT_PERSONA?.trim() ? " from INSTINCT_PERSONA" : " (default persona)"}`);
 
   const audit = new AuditLog(state);
   const policy = new PolicyEngine(loadPolicy(state), {
@@ -131,12 +134,16 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
       audit,
       config,
       outbox,
+      workspaceDir: state.path("workspace"),
       ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
       ...(env.BRAVE_SEARCH_API_KEY ? { searchApiKey: env.BRAVE_SEARCH_API_KEY } : {}),
     }),
   );
 
-  if (channel) registry.registerMany(messagingTools({ channel, contacts, config }));
+  // Messaging needs Inkbox. send_file does not: without a wire it still hands files
+  // to the dashboard chat, which is how `instinct chat` and the smoke test get them.
+  if (channel) registry.registerMany(messagingTools({ channel, contacts, config, dataDir: state.root }));
+  else registry.register(sendFileTool({ contacts, config, dataDir: state.root }));
 
   registry.registerMany(fileTools(state.path("workspace"), { env }));
 
@@ -165,7 +172,8 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   }
 
   // Apps through Composio, when the deployer gave us a key. The key is the switch:
-  // config.apps.enabled only records that a toolkit list was seeded.
+  // config.apps.enabled only records that a toolkit list was seeded. A list of
+  // `all` (or `*`) drops the allowlist so any app can be connected by name.
   let apps: ComposioApps | undefined;
   let appsConnected: string[] | undefined;
   if (env.COMPOSIO_API_KEY) {
@@ -180,11 +188,12 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
     if (connected) {
       apps = composio;
       registry.registerMany(connected.tools);
+      registry.registerMany(appsTools({ apps: composio }));
       const on = connected.status.filter((s: ToolkitStatus) => s.connected).map((s: ToolkitStatus) => s.slug);
       const missing = connected.status.filter((s: ToolkitStatus) => !s.connected).map((s: ToolkitStatus) => s.slug);
       appsConnected = on;
-      promptSections.push(appsGuidance(on, missing));
-      log(`apps: ${connected.tools.length} tools, connected: ${on.join(", ") || "none"}`);
+      promptSections.push(appsGuidance(on, missing, { anyApp: composio.allToolkits }));
+      log(`apps: ${connected.tools.length} tools${composio.allToolkits ? " (any app by name)" : ""}, connected: ${on.join(", ") || "none"}`);
     }
   }
 

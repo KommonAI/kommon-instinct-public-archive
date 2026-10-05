@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PolicyEngine, defaultPolicy } from "@open-instinct/core";
 import type { Principal, Tier } from "@open-instinct/core";
-import { APPS_MANAGE, CONTACTS_WRITE, capabilitiesForSlug, toolkitOfSlug, COMPOSIO_META_TOOLS } from "../src/capabilities.js";
+import { APPS_MANAGE, CONTACTS_WRITE, PAYMENT_TOOLKITS, capabilitiesForSlug, sensitiveCapabilitiesForSlug, toolkitOfSlug, COMPOSIO_META_TOOLS } from "../src/capabilities.js";
 import { metaFor } from "../src/wrap.js";
 
 describe("capabilitiesForSlug", () => {
@@ -37,10 +37,50 @@ describe("capabilitiesForSlug", () => {
     ["COMPOSIO_MANAGE_CONNECTIONS", APPS_MANAGE],
     ["COMPOSIO_SEARCH_TOOLS", APPS_MANAGE],
     ["COMPOSIO_MULTI_EXECUTE_TOOL", APPS_MANAGE],
-    ["SLACK_SEND_MESSAGE", APPS_MANAGE],
     ["NOTION_CREATE_PAGE", APPS_MANAGE],
+    ["GITHUB_CREATE_ISSUE", APPS_MANAGE],
+    ["GITHUB_DELETE_REPOSITORY", APPS_MANAGE],
+    ["LINEAR_UPDATE_ISSUE", APPS_MANAGE],
     ["", APPS_MANAGE],
   ] as const)("%s -> %j", (slug, expected) => {
+    expect(capabilitiesForSlug(slug)).toEqual([...expected]);
+  });
+
+  /**
+   * Toolkits without a row stay owner-only (APPS_MANAGE) and gain a stricter tag when
+   * the slug sends, changes a calendar or moves money. Reads never gain a tag.
+   */
+  it.each([
+    ["SLACK_SEND_MESSAGE", ["email.send", ...APPS_MANAGE]],
+    ["DISCORD_SEND_MESSAGE", ["email.send", ...APPS_MANAGE]],
+    ["TWILIO_SEND_SMS", ["email.send", ...APPS_MANAGE]],
+    ["OUTLOOK_SEND_EMAIL", ["email.send", ...APPS_MANAGE]],
+    ["OUTLOOK_REPLY_EMAIL", ["email.send", ...APPS_MANAGE]],
+    ["SENDGRID_SEND_EMAIL", ["email.send", ...APPS_MANAGE]],
+    ["OUTLOOK_CREATE_DRAFT_EMAIL", ["email.send", ...APPS_MANAGE]],
+    ["OUTLOOK_LIST_MESSAGES", APPS_MANAGE],
+    ["SLACK_LIST_CHANNELS", APPS_MANAGE],
+    ["SENDGRID_GET_STATS", APPS_MANAGE],
+    ["OUTLOOK_CALENDAR_CREATE_EVENT", ["calendar.write", ...APPS_MANAGE]],
+    ["CALENDLY_CANCEL_EVENT", ["calendar.write", ...APPS_MANAGE]],
+    ["ZOOM_CREATE_MEETING", ["calendar.write", ...APPS_MANAGE]],
+    ["OUTLOOK_CALENDAR_LIST_EVENTS", APPS_MANAGE],
+    ["POSTHOG_CAPTURE_EVENT", APPS_MANAGE],
+    ["STRIPE_CREATE_PAYMENT_INTENT", ["purchase", ...APPS_MANAGE]],
+    ["STRIPE_CREATE_CUSTOMER", ["purchase", ...APPS_MANAGE]],
+    ["STRIPE_LIST_CUSTOMERS", APPS_MANAGE],
+    ["STRIPE_GET_PAYMENT_INTENT", APPS_MANAGE],
+    ["PAYPAL_CREATE_PAYOUT", ["purchase", ...APPS_MANAGE]],
+    ["SHOPIFY_CREATE_ORDER", ["purchase", ...APPS_MANAGE]],
+    ["SHOPIFY_CANCEL_ORDER", ["purchase", ...APPS_MANAGE]],
+    ["SHOPIFY_GET_ORDER", APPS_MANAGE],
+    ["SHOPIFY_UPDATE_PRODUCT", APPS_MANAGE],
+    ["WISE_CREATE_TRANSFER", ["purchase", ...APPS_MANAGE]],
+    ["WISE_LIST_TRANSFERS", APPS_MANAGE],
+    ["COINBASE_SEND_TRANSACTION", ["email.send", "purchase", ...APPS_MANAGE]],
+    ["AMAZON_CHECKOUT_CART", ["purchase", ...APPS_MANAGE]],
+    ["NOTION_UPDATE_PAGE", APPS_MANAGE],
+  ] as const)("unknown toolkit %s -> %j", (slug, expected) => {
     expect(capabilitiesForSlug(slug)).toEqual([...expected]);
   });
 
@@ -51,8 +91,16 @@ describe("capabilitiesForSlug", () => {
   });
 
   it("does not treat a lookalike toolkit as Gmail", () => {
-    expect(capabilitiesForSlug("GMAILX_SEND_EMAIL")).toEqual([...APPS_MANAGE]);
+    expect(capabilitiesForSlug("GMAILX_SEND_EMAIL")).toEqual(["email.send", ...APPS_MANAGE]);
     expect(capabilitiesForSlug("MYGMAIL_FETCH")).toEqual([...APPS_MANAGE]);
+  });
+
+  it("always keeps the owner-only pair on an unknown toolkit, however sensitive", () => {
+    for (const slug of ["SLACK_SEND_MESSAGE", "STRIPE_CREATE_CHARGE", "ZOOM_CREATE_MEETING", "NOTION_CREATE_PAGE", "ACME_DO_THING"]) {
+      const caps = capabilitiesForSlug(slug);
+      expect(caps, slug).toContain("apps.use");
+      expect(caps, slug).toContain("trust.manage");
+    }
   });
 
   it("maps every meta tool to the owner-only set", () => {
@@ -60,9 +108,30 @@ describe("capabilitiesForSlug", () => {
   });
 
   it("returns a fresh array each time so callers cannot mutate the table", () => {
-    const a = capabilitiesForSlug("SLACK_SEND_MESSAGE");
+    const a = capabilitiesForSlug("NOTION_CREATE_PAGE");
     a.push("email.send");
-    expect(capabilitiesForSlug("SLACK_SEND_MESSAGE")).toEqual([...APPS_MANAGE]);
+    expect(capabilitiesForSlug("NOTION_CREATE_PAGE")).toEqual([...APPS_MANAGE]);
+  });
+});
+
+describe("sensitiveCapabilitiesForSlug", () => {
+  it("returns nothing for a bare toolkit or a read", () => {
+    expect(sensitiveCapabilitiesForSlug("STRIPE")).toEqual([]);
+    expect(sensitiveCapabilitiesForSlug("STRIPE_LIST_CHARGES")).toEqual([]);
+    expect(sensitiveCapabilitiesForSlug("slack_search_messages")).toEqual([]);
+  });
+
+  it("treats every write in a payment toolkit as a purchase", () => {
+    for (const toolkit of PAYMENT_TOOLKITS) {
+      expect(sensitiveCapabilitiesForSlug(`${toolkit}_CREATE_THING`), toolkit).toEqual(["purchase"]);
+      expect(sensitiveCapabilitiesForSlug(`${toolkit}_LIST_THINGS`), toolkit).toEqual([]);
+    }
+  });
+
+  it("does not let a toolkit name trigger a verb match", () => {
+    // SENDGRID contains SEND, but only the action words count.
+    expect(sensitiveCapabilitiesForSlug("SENDGRID_CREATE_TEMPLATE")).toEqual([]);
+    expect(sensitiveCapabilitiesForSlug("PAYHIP_UPDATE_PRODUCT")).toEqual([]);
   });
 });
 
@@ -83,6 +152,9 @@ describe("policy outcomes with the default tier table", () => {
     "COMPOSIO_MANAGE_CONNECTIONS",
     "COMPOSIO_SEARCH_TOOLS",
     "SLACK_SEND_MESSAGE",
+    "NOTION_CREATE_PAGE",
+    "STRIPE_LIST_CUSTOMERS",
+    "ZOOM_CREATE_MEETING",
     "GOOGLECONTACTS_CREATE_CONTACT",
     "GOOGLECONTACTS_UPDATE_CONTACT",
     "GOOGLECONTACTS_DELETE_CONTACT",
@@ -96,6 +168,23 @@ describe("policy outcomes with the default tier table", () => {
       expect(decision.outcome, `${slug} for ${tier}`).toBe("deny");
     }
     expect(engine.evaluate(principalFor("owner"), meta, {}).outcome).toBe("allow");
+  });
+
+  it("a payment-like app action asks the owner because no amount is known, and is denied to everyone else", () => {
+    for (const slug of ["STRIPE_CREATE_PAYMENT_INTENT", "SHOPIFY_CREATE_ORDER", "WISE_CREATE_TRANSFER"]) {
+      const meta = metaFor(slug);
+      expect(engine.evaluate(principalFor("owner"), meta, {}).outcome, slug).toBe("ask");
+      for (const tier of nonOwners) expect(engine.evaluate(principalFor(tier), meta, {}).outcome, `${slug} for ${tier}`).toBe("deny");
+    }
+  });
+
+  it("a grant on the owner-only pair alone does not open a payment or a send", () => {
+    const granted = new PolicyEngine(defaultPolicy());
+    const partner = principalFor("partner");
+    granted.addGrant({ to: partner.id, capabilities: ["apps.use", "trust.manage"], note: "test" });
+    expect(granted.evaluate(partner, metaFor("NOTION_CREATE_PAGE"), {}).outcome).toBe("allow");
+    expect(granted.evaluate(partner, metaFor("STRIPE_CREATE_CHARGE"), {}).outcome).not.toBe("allow");
+    expect(granted.evaluate(partner, metaFor("SLACK_SEND_MESSAGE"), {}).outcome).not.toBe("allow");
   });
 
   it("the stopgap tags really are owner-only in core's table", () => {

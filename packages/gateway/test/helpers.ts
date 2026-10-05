@@ -94,7 +94,7 @@ export function fakeInkbox(opts: { subscriptionSigningKey?: string } = {}): Fake
     // The org-wide triage endpoint answers with a placeholder handle, never the user's own.
     async routerInfo() {
       calls.push("routerInfo");
-      return { number: "+16504849720", connectCommand: "connect @handle", smsLink: "sms:+16504849720&body=connect%20%40handle", qrPngDataUrl: "data:image/png;base64,iVBORw0KGgo=" };
+      return { number: "+14155550199", connectCommand: "connect @handle", smsLink: "sms:+14155550199&body=connect%20%40handle", qrPngDataUrl: "data:image/png;base64,iVBORw0KGgo=" };
     },
     async enableA2A() {},
     async addContactRule() {},

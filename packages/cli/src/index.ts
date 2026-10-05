@@ -9,3 +9,5 @@ export { readSecrets, writeSecrets, secretsToEnv, applySecretsToEnv, type Inkbox
 export type { ServerModule, TunnelConnector, TunnelHandle } from "./commands/dev.js";
 export { resolveCliDataDir } from "./context.js";
 export type { ProvisionerLike, ProvisionerFactory, ProvisionerOptions } from "./inkbox-client.js";
+export { editorCommand } from "./commands/persona.js";
+export { ownerPromptInput, renderLayerTable, SAMPLE_OWNER_TOOL_GROUPS, type PromptPreviewOptions, type SkillsLoader } from "./commands/prompt.js";

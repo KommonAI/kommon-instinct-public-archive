@@ -9,8 +9,8 @@ the rest of the system uses:
 |---|---|
 | `InkboxProvisioner` | Admin-key operations: create an identity, mint its own API key, create the webhook signing key, subscribe webhooks, read the iMessage router, enable A2A, allow peers, create invitations |
 | `parseInkboxEvent` + `verifyInkboxSignature` | Turn a signed webhook into one `InboundMessage` the runtime understands |
-| `InkboxChannel` | The `Outbox`: send iMessage, SMS, email and A2A replies, plus typing, tapbacks and read receipts |
-| `InkboxA2A` + `messagingTools` | A2A worker and caller over REST and JSON-RPC, and the `send_message`, `send_typing`, `react` tools the model calls |
+| `InkboxChannel` | The `Outbox`: send iMessage, SMS, email and A2A replies, plus typing, tapbacks and read receipts; `sendFile` attaches a file (iMessage and SMS through the media upload, email as an attachment) |
+| `InkboxA2A` + `messagingTools` | A2A worker and caller over REST and JSON-RPC, and the `send_message`, `send_typing`, `react`, `send_file` tools the model calls |
 
 Everything persisted lives in core's `StateDir`; this package keeps no files.
 Every REST call this package makes itself goes through `fetchImpl ?? globalThis.fetch`.
@@ -163,7 +163,7 @@ The text part is for any A2A agent. The data part carries the typed OIP/1 intent
 
 ## Tools
 
-`messagingTools({ channel, contacts, config })` returns three tools tagged `converse` in the `messaging` group:
+`messagingTools({ channel, contacts, config, dataDir })` returns four tools tagged `converse` in the `messaging` group:
 
 - `send_message { to?, channel?, text, subject? }`. No `to` replies in the current conversation.
   `to` is a contact id or name, a phone, an email, or `"owner"`. A non-owner may only reply in
@@ -171,6 +171,16 @@ The text part is for any A2A agent. The data part carries the typed OIP/1 intent
   owner is prefixed with who sent it.
 - `send_typing {}` shows the iMessage typing indicator.
 - `react { messageId, reaction }` sends a tapback.
+- `send_file { path, to?, channel?, caption?, subject? }` sends a file as an attachment. It is also
+  tagged `files.read`. Relative paths resolve under `<dataDir>/workspace`; absolute paths must stay
+  under `dataDir` after symlinks. iMessage and SMS go through `uploadIMessageMedia` (10 MB limit,
+  the error suggests email); email attaches up to 25 MB. With no `to` in a `chat:*` conversation
+  (the Maritime dashboard or `instinct chat`) it returns the path plus a fenced `maritime-file`
+  block the dashboard renders as an attachment. Without `dataDir` every path is refused.
+
+`sendFileTool({ contacts, config, dataDir, channel? })` is the same tool on its own. The server
+registers it without a channel when Inkbox is not configured, so the dashboard chat still gets
+files; any send that needs a wire then fails with a plain reason.
 
 ## Testing
 

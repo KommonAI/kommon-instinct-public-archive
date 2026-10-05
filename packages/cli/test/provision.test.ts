@@ -26,7 +26,7 @@ function fakeProvisioner(opts: { takenHandles?: string[] } = {}) {
     },
     async routerInfo() {
       calls.push({ method: "routerInfo", args: [] });
-      return { number: "+16504849720", connectCommand: "connect @x", smsLink: "sms:+16504849720", qrPngDataUrl: "data:image/png;base64,iVBORw0KGgo=" };
+      return { number: "+14155550199", connectCommand: "connect @x", smsLink: "sms:+14155550199", qrPngDataUrl: "data:image/png;base64,iVBORw0KGgo=" };
     },
     async addContactRule(handle, peerHandle, direction) {
       calls.push({ method: "addContactRule", args: [handle, peerHandle, direction] });
@@ -66,7 +66,7 @@ describe("init with INKBOX_ADMIN_API_KEY", () => {
     expect(r.out).toContain("export INKBOX_API_KEY=ik_minted");
     expect(r.out).toContain("export INKBOX_SIGNING_KEY=whsec_signing");
     expect(r.out).toContain("connect @x");
-    expect(r.out).toContain("+16504849720");
+    expect(r.out).toContain("+14155550199");
   });
 
   it("adopts the handle Inkbox actually assigned and saves it in config", async () => {
@@ -104,8 +104,8 @@ describe("connect", () => {
     await run(initArgs, { INSTINCT_DATA_DIR: dir, INKBOX_ADMIN_API_KEY: "ak" }, { createProvisioner: () => fake.p });
     const r = await run(["connect"], { INSTINCT_DATA_DIR: dir }, { createProvisioner: () => fake.p });
     expect(r.code, r.err).toBe(0);
-    expect(r.out).toContain("+16504849720");
-    expect(r.out).toContain("sms:+16504849720");
+    expect(r.out).toContain("+14155550199");
+    expect(r.out).toContain("sms:+14155550199");
     const qr = path.join(dir, "connect-qr.png");
     expect(fs.existsSync(qr)).toBe(true);
     expect(fs.readFileSync(qr).subarray(1, 4).toString()).toBe("PNG");

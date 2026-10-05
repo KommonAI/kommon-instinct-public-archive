@@ -4,7 +4,7 @@
  * owner flow, the stranger flow, the schedule flow and a stranger's A2A task.
  * Exits non-zero on failure.
  */
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -205,6 +205,31 @@ async function main(): Promise<void> {
     check(allowed.length === 1 && allowed[0] === "notify_owner", `policy allowed only notify_owner for the stranger (got ${JSON.stringify(allowed)})`);
     const calls = a2aAudit.filter((e) => e.kind === "tool_call").map((e) => (e.detail as { tool?: string }).tool);
     check(!calls.includes("memory_read"), "memory_read never executed for the stranger");
+
+    console.log("5. owner asks for a PDF");
+    // No Inkbox here, so send_file runs in chat-only mode: it hands the dashboard a
+    // maritime-file block instead of sending over a wire.
+    const pdfRelative = "briefs/smoke.pdf";
+    const pdfAbsolute = join(realpathSync(dataDir), "workspace", pdfRelative);
+    const fence = "```maritime-file\n" + JSON.stringify({ path: pdfAbsolute, name: "smoke.pdf", mime: "application/pdf" }) + "\n```";
+    faux.setResponses([
+      fauxAssistantMessage(
+        [fauxToolCall("create_pdf", { path: pdfRelative, title: "Smoke brief", markdown: "# Smoke brief\n\nOne paragraph.\n\n- first point\n- second point\n\n| a | b |\n|---|---|\n| 1 | 2 |" })],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage([fauxToolCall("send_file", { path: pdfRelative, caption: "Here is the brief as a PDF." })], { stopReason: "toolUse" }),
+      fauxAssistantMessage(`Here is the brief as a PDF.\n${fence}`),
+    ]);
+    const pdfChat = await post("/chat", { message: "send me that as a PDF", source: "cli" });
+    check(pdfChat.status === 200, "PDF chat is 200");
+    check(existsSync(pdfAbsolute) && readFileSync(pdfAbsolute).subarray(0, 5).toString() === "%PDF-", `a real PDF exists at workspace/${pdfRelative}`);
+    const pdfAudit = new AuditLog(app.state).read({ kinds: ["tool_call"] }).filter((e) => e.conversationKey === "chat:default");
+    const pdfCalls = pdfAudit.map((e) => e.detail as { tool?: string; isError?: boolean; result?: string });
+    const created = pdfCalls.find((c) => c.tool === "create_pdf");
+    const sent = pdfCalls.find((c) => c.tool === "send_file");
+    check(created !== undefined && created.isError === false && /Wrote .*smoke\.pdf .*1 page/.test(created.result ?? ""), `create_pdf wrote the file and reported one page (got ${JSON.stringify(created?.result)})`);
+    check(sent !== undefined && sent.isError === false && (sent.result ?? "").includes(pdfAbsolute), `send_file answered with the file's path (got ${JSON.stringify(sent?.result)})`);
+    check(typeof pdfChat.json.response === "string" && (pdfChat.json.response.includes("```maritime-file") || pdfChat.json.response.includes(pdfAbsolute)), "the reply carries the maritime-file block or the path");
 
     console.log("status");
     const status = await get("/");

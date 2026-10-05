@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StateDir } from "@open-instinct/core";
-import { APPS_STATE_FILE, ComposioApps, normalizeToolkits, type ComposioClientLike, type ComposioSessionLike, type SessionCreateConfig } from "../src/composio.js";
+import { ALL_TOOLKITS, APPS_STATE_FILE, ComposioApps, normalizeToolkits, wantsAllToolkits, type ComposioClientLike, type ComposioSessionLike, type SessionCreateConfig } from "../src/composio.js";
 import type { McpToolSource } from "../src/wrap.js";
 
 function fakeState(initial: Record<string, unknown> = {}): StateDir & { files: Record<string, unknown> } {
@@ -140,6 +140,87 @@ describe("ComposioApps.connect", () => {
   });
 });
 
+describe("ComposioApps in all-toolkits mode", () => {
+  it.each([["all"], ["*"], ["ALL"], [" All "], ["gmail", "all"]])("%j creates a session with no toolkit allowlist and no preset", async (...toolkits) => {
+    const state = fakeState();
+    const composio = fakeComposio();
+    const logs: string[] = [];
+    const apps = new ComposioApps({ ...base, toolkits, state, logger: (m) => logs.push(m), adapters: { createComposio: () => composio.client, connectMcp: fakeMcp().connectMcp } });
+    await apps.connect();
+    expect(apps.allToolkits).toBe(true);
+    expect(apps.mode).toBe("router");
+    expect(apps.toolkitSlugs).toEqual([ALL_TOOLKITS]);
+    expect(composio.created).toHaveLength(1);
+    const config = composio.created[0]!.config;
+    expect(config).toEqual({ manageConnections: { enable: true }, mcp: true });
+    expect("toolkits" in config).toBe(false);
+    expect("sessionPreset" in config).toBe(false);
+    expect(state.files[APPS_STATE_FILE]).toMatchObject({ sessionId: "sess_new_1", userId: "maria", toolkits: [ALL_TOOLKITS], mode: "router" });
+    expect(logs.some((l) => l.includes("all toolkits"))).toBe(true);
+  });
+
+  it("ignores an explicit direct mode and says so", async () => {
+    const composio = fakeComposio();
+    const logs: string[] = [];
+    const apps = new ComposioApps({ ...base, toolkits: ["all"], mode: "direct", state: fakeState(), logger: (m) => logs.push(m), adapters: { createComposio: () => composio.client, connectMcp: fakeMcp().connectMcp } });
+    await apps.connect();
+    expect(apps.mode).toBe("router");
+    expect(composio.created[0]?.config.sessionPreset).toBeUndefined();
+    expect(logs.some((l) => l.includes("using router mode"))).toBe(true);
+  });
+
+  it("reuses a saved all-mode session and makes a new one when switching to a list", async () => {
+    const saved = { sessionId: "sess_all", userId: "maria", toolkits: ["*"], mode: "router", createdAt: "x" };
+    const composio = fakeComposio();
+    const again = new ComposioApps({ ...base, toolkits: ["*"], state: fakeState({ [APPS_STATE_FILE]: saved }), adapters: { createComposio: () => composio.client, connectMcp: fakeMcp().connectMcp } });
+    await again.connect();
+    expect(composio.used).toEqual(["sess_all"]);
+    expect(composio.created).toEqual([]);
+
+    const narrowed = new ComposioApps({ ...base, toolkits: ["gmail"], state: fakeState({ [APPS_STATE_FILE]: saved }), adapters: { createComposio: () => composio.client, connectMcp: fakeMcp().connectMcp } });
+    await narrowed.connect();
+    expect(composio.created).toHaveLength(1);
+    expect(composio.created[0]?.config.toolkits).toEqual(["gmail"]);
+  });
+
+  it("reports the active connections, paging through the list, and never a no-auth toolkit", async () => {
+    const calls: unknown[] = [];
+    const toolkits = vi.fn(async (opts?: { cursor?: string }) => {
+      calls.push(opts);
+      if (!opts?.cursor) {
+        return { items: [{ slug: "GMAIL", connection: { isActive: true } }, { slug: "notion", connection: { isActive: false } }, { slug: "hackernews", isNoAuth: true }], nextCursor: "p2" };
+      }
+      return { items: [{ slug: "slack", connection: { isActive: true } }, { slug: "gmail", connection: { isActive: true } }], nextCursor: null };
+    });
+    const composio = fakeComposio({ sessions: { s: fakeSession("s", { toolkits }) } });
+    const state = fakeState({ [APPS_STATE_FILE]: { sessionId: "s", userId: "maria", toolkits: ["*"], mode: "router", createdAt: "x" } });
+    const apps = new ComposioApps({ ...base, toolkits: ["all"], state, adapters: { createComposio: () => composio.client, connectMcp: fakeMcp().connectMcp } });
+    expect(await apps.connectedToolkits()).toEqual([
+      { slug: "gmail", connected: true },
+      { slug: "slack", connected: true },
+    ]);
+    expect(calls).toEqual([
+      { isConnected: true, limit: 100 },
+      { isConnected: true, limit: 100, cursor: "p2" },
+    ]);
+  });
+
+  it("stops paging after a bounded number of pages", async () => {
+    const toolkits = vi.fn(async () => ({ items: [{ slug: "gmail", connection: { isActive: true } }], nextCursor: "again" }));
+    const composio = fakeComposio({ sessions: { s: fakeSession("s", { toolkits }) } });
+    const state = fakeState({ [APPS_STATE_FILE]: { sessionId: "s", userId: "maria", toolkits: ["*"], mode: "router", createdAt: "x" } });
+    const apps = new ComposioApps({ ...base, toolkits: ["all"], state, adapters: { createComposio: () => composio.client, connectMcp: fakeMcp().connectMcp } });
+    expect(await apps.connectedToolkits()).toEqual([{ slug: "gmail", connected: true }]);
+    expect(toolkits).toHaveBeenCalledTimes(10);
+  });
+
+  it("still hands out connect links for any toolkit", async () => {
+    const composio = fakeComposio();
+    const apps = new ComposioApps({ ...base, toolkits: ["all"], state: fakeState(), adapters: { createComposio: () => composio.client, connectMcp: fakeMcp().connectMcp } });
+    expect(await apps.connectLink(" Notion ")).toBe("https://connect.example/notion");
+  });
+});
+
 describe("ComposioApps.tools", () => {
   it("wraps the MCP tools with app_ names and capabilities, and caches", async () => {
     const composio = fakeComposio();
@@ -214,5 +295,22 @@ describe("ComposioApps.close", () => {
 describe("normalizeToolkits", () => {
   it("lowercases, trims, dedupes and sorts", () => {
     expect(normalizeToolkits([" Gmail", "gmail", "GOOGLECALENDAR", "", "  "])).toEqual(["gmail", "googlecalendar"]);
+  });
+
+  it("collapses to the all marker when any entry is all or *", () => {
+    expect(normalizeToolkits(["all"])).toEqual(["*"]);
+    expect(normalizeToolkits(["gmail", " ALL "])).toEqual(["*"]);
+    expect(normalizeToolkits(["*", "slack"])).toEqual(["*"]);
+    expect(normalizeToolkits([])).toEqual([]);
+  });
+});
+
+describe("wantsAllToolkits", () => {
+  it("accepts all and * in any case, nothing else", () => {
+    expect(wantsAllToolkits(["all"])).toBe(true);
+    expect(wantsAllToolkits(["*"])).toBe(true);
+    expect(wantsAllToolkits(["gmail", "All"])).toBe(true);
+    expect(wantsAllToolkits(["gmail", "allthings"])).toBe(false);
+    expect(wantsAllToolkits([])).toBe(false);
   });
 });

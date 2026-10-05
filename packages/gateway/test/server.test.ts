@@ -100,9 +100,9 @@ describe("gateway http", () => {
     const page = await connect.text();
     expect(connect.status).toBe(200);
     expect(page).toContain("connect @maria");
-    expect(page).toContain("+16504849720");
+    expect(page).toContain("+14155550199");
     // The sms: button is built for this handle, never from the org-wide placeholder link.
-    expect(page).toContain('href="sms:+16504849720&amp;body=connect%20%40maria"');
+    expect(page).toContain('href="sms:+14155550199&amp;body=connect%20%40maria"');
     expect(page).not.toContain("connect%20%40handle");
     // The shared QR encodes the placeholder handle, so it is not shown.
     expect(page).not.toContain("data:image/png;base64,");
@@ -117,7 +117,7 @@ describe("gateway http", () => {
     const asked: string[] = [];
     const perUser = async (u: UserRecord): Promise<RouterInfo> => {
       asked.push(u.identityApiKey);
-      return { number: "+16504849720", connectCommand: `connect @${u.handle}`, smsLink: `sms:+16504849720&body=connect%20%40${u.handle}`, qrPngDataUrl: "data:image/png;base64,QUJD" };
+      return { number: "+14155550199", connectCommand: `connect @${u.handle}`, smsLink: `sms:+14155550199&body=connect%20%40${u.handle}`, qrPngDataUrl: "data:image/png;base64,QUJD" };
     };
     const { base } = await boot({ routerInfoFor: perUser, seed: [readyUser({ id: "usr_q", handle: "maria" })] });
     const page = await (await fetch(`${base}/connect/usr_q`)).text();
@@ -125,7 +125,7 @@ describe("gateway http", () => {
     expect(page).toContain('src="data:image/png;base64,QUJD"');
     expect(page).toContain("connect%20%40maria");
 
-    const wrong = async (): Promise<RouterInfo> => ({ number: "+16504849720", connectCommand: "connect @bob", smsLink: "sms:+16504849720&body=connect%20%40bob", qrPngDataUrl: "data:image/png;base64,Qk9C" });
+    const wrong = async (): Promise<RouterInfo> => ({ number: "+14155550199", connectCommand: "connect @bob", smsLink: "sms:+14155550199&body=connect%20%40bob", qrPngDataUrl: "data:image/png;base64,Qk9C" });
     const other = await boot({ routerInfoFor: wrong, seed: [readyUser({ id: "usr_w", handle: "maria" })] });
     const wrongPage = await (await fetch(`${other.base}/connect/usr_w`)).text();
     expect(wrongPage).not.toContain("Qk9C");

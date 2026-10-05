@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ApprovalStore } from "../src/approvals.js";
 import { AuditLog } from "../src/audit.js";
@@ -62,7 +64,8 @@ describe("coreTools registration", () => {
   it("registers the documented tools with the documented capabilities", () => {
     const { registry } = setup();
     const names = registry.all().map((t) => t.spec.name).sort();
-    expect(names).toEqual(["ask_owner", "audit_read", "journal_append", "memory_read", "memory_write", "notify_owner", "schedule_create", "schedule_delete", "schedule_list", "web_fetch", "web_search"]);
+    expect(names).toEqual(["ask_owner", "audit_read", "create_pdf", "journal_append", "memory_read", "memory_write", "notify_owner", "schedule_create", "schedule_delete", "schedule_list", "web_fetch", "web_search"]);
+    expect(registry.meta("create_pdf")).toMatchObject({ capabilities: ["files.write"], group: "files" });
     expect(registry.meta("memory_write")?.capabilities).toEqual(["memory.write"]);
     expect(registry.meta("schedule_create")?.capabilities).toEqual(["schedule.manage"]);
     expect(registry.meta("ask_owner")?.capabilities).toEqual(["owner.relay"]);
@@ -357,5 +360,52 @@ describe("html helpers", () => {
   it("parseDuckDuckGoHtml skips links without text and unwraps redirects", () => {
     const html = `<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fa.test%2F"></a><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fb.test%2Fpath%3Fq%3D1">B</a>`;
     expect(parseDuckDuckGoHtml(html)).toEqual([{ title: "B", url: "https://b.test/path?q=1", snippet: "" }]);
+  });
+});
+
+describe("create_pdf", () => {
+  const SAMPLE = "# Brief\n\nOne **bold** line.\n\n- a\n- b\n\n| k | v |\n|---|---|\n| x | 1 |\n";
+
+  it("writes a PDF under the workspace and reports path, size and pages", async () => {
+    const { run, text, state, deps } = setup();
+    const workspace = fs.realpathSync(state.path("workspace"));
+    const registry = new ToolRegistry();
+    registry.registerMany(coreTools({ ...deps, workspaceDir: workspace }));
+    const tool = registry.get("create_pdf")!;
+    const ctx: ToolContext = { principal: principalOf("owner"), conversationKey: "chat:cli", channel: "chat", now: () => NOW };
+    const r = await tool.spec.execute({ path: "research/2026-10-03-brief.pdf", markdown: SAMPLE, title: "Brief" }, ctx);
+    expect(typeof r === "object" && r.isError).toBeFalsy();
+    const out = text(r);
+    const file = path.join(workspace, "research", "2026-10-03-brief.pdf");
+    expect(out).toContain(`Wrote ${file}`);
+    expect(out).toMatch(/\d+(\.\d+)? KB, 1 page\)/);
+    expect(fs.readFileSync(file).subarray(0, 5).toString()).toBe("%PDF-");
+    expect(typeof r === "object" && r.details).toMatchObject({ path: file, pages: 1 });
+    // The default deps (no workspace) refuse instead of guessing a directory.
+    const bare = await run("create_pdf", { path: "x.pdf", markdown: "hi" });
+    expect(typeof bare === "object" && bare.isError).toBe(true);
+    expect(text(bare)).toMatch(/No workspace/);
+  });
+
+  it("rejects path traversal, absolute paths outside the workspace and non-pdf names", async () => {
+    const { deps, state, text } = setup();
+    const workspace = fs.realpathSync(state.path("workspace"));
+    const registry = new ToolRegistry();
+    registry.registerMany(coreTools({ ...deps, workspaceDir: workspace }));
+    const tool = registry.get("create_pdf")!;
+    const ctx: ToolContext = { principal: principalOf("owner"), conversationKey: "chat:cli", channel: "chat", now: () => NOW };
+    for (const bad of ["../escape.pdf", "docs/../../escape.pdf", "/tmp/escape.pdf", path.join(state.root, "memory", "escape.pdf"), "..", ""]) {
+      const r = await tool.spec.execute({ path: bad, markdown: "x" }, ctx);
+      expect(typeof r === "object" && r.isError, bad).toBe(true);
+      expect(text(r), bad).toMatch(/outside the workspace|must end in \.pdf/);
+    }
+    const notPdf = await tool.spec.execute({ path: "docs/brief.md", markdown: "x" }, ctx);
+    expect(text(notPdf)).toMatch(/must end in \.pdf/);
+    expect(fs.existsSync(path.join(state.root, "escape.pdf"))).toBe(false);
+    expect(fs.existsSync("/tmp/escape.pdf")).toBe(false);
+    // An absolute path inside the workspace is fine.
+    const ok = await tool.spec.execute({ path: path.join(workspace, "docs", "ok.PDF"), markdown: "x" }, ctx);
+    expect(typeof ok === "object" && ok.isError).toBeFalsy();
+    expect(fs.existsSync(path.join(workspace, "docs", "ok.PDF"))).toBe(true);
   });
 });

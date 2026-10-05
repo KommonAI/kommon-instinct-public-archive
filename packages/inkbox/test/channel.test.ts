@@ -211,3 +211,70 @@ describe("parseConversationKey", () => {
     expect(parseConversationKey(undefined)).toEqual({ channel: "unknown", id: "" });
   });
 });
+
+describe("InkboxChannel.sendFile", () => {
+  const pdf = Buffer.from("%PDF-1.4\n%fake\n");
+  const mediaRoute = { "POST /api/v1/imessage/media": { body: { media_url: "https://media.inkbox.ai/m/abc.pdf", content_type: "application/pdf", size: 15 } } };
+
+  it("attaches the file to an email in the SDK's MailAttachmentInput shape", async () => {
+    const ch = channel();
+    const r = await ch.sendFile({ channel: "email", to: "sam@example.com", filename: "brief.pdf", contentType: "application/pdf", content: pdf, caption: "Here is the brief as a PDF.", subject: "Research brief" }, ctx("chat:cli"));
+    expect(r).toEqual({ channel: "email" });
+    const post = sends("/api/v1/mail/mailboxes/maria-instinct@inkbox.ai/messages")[0];
+    expect(post?.body).toEqual({
+      recipients: { to: ["sam@example.com"] },
+      subject: "Research brief",
+      body_text: "Here is the brief as a PDF.",
+      attachments: [{ filename: "brief.pdf", content_type: "application/pdf", content_base64: pdf.toString("base64") }],
+    });
+    expect(sends("/api/v1/imessage/media")).toHaveLength(0);
+  });
+
+  it("replies in an email thread with the attachment, keeping Re: subject and In-Reply-To, and defaults the body", async () => {
+    const ch = channel();
+    ch.remember({ id: "e", channel: "email", conversationKey: "email:th_9", from: "sam@example.com", text: "x", replyRef: { subject: "Plans", messageId: "<p@x>" }, receivedAt: "2026-10-03T00:00:00Z" });
+    await ch.sendFile({ channel: "email", conversationKey: "email:th_9", filename: "plan.csv", contentType: "text/csv", content: Buffer.from("a,b\n") }, ctx("email:th_9"));
+    const post = sends("/api/v1/mail/mailboxes/maria-instinct@inkbox.ai/messages")[0];
+    expect(post?.body).toMatchObject({ recipients: { to: ["sam@example.com"] }, subject: "Re: Plans", body_text: "Attached: plan.csv", in_reply_to_message_id: "<p@x>" });
+    expect((post?.body as { attachments: unknown[] }).attachments).toHaveLength(1);
+  });
+
+  it("uploads iMessage media first, then sends the URL with the caption in the conversation", async () => {
+    fake = fakeFetch({ ...sdkRoutes(), ...mediaRoute });
+    vi.stubGlobal("fetch", fake.fetchImpl);
+    const r = await channel().sendFile({ channel: "imessage", conversationKey: "imessage:conv_1", filename: "brief.pdf", contentType: "application/pdf", content: pdf, caption: "Here is the brief as a PDF." }, ctx("imessage:conv_1"));
+    expect(r).toEqual({ channel: "imessage", mediaUrl: "https://media.inkbox.ai/m/abc.pdf" });
+    const upload = sends("/api/v1/imessage/media")[0];
+    expect(upload?.form).toEqual([{ field: "file", filename: "brief.pdf", type: "application/pdf", size: pdf.length }]);
+    expect(upload?.headers["x-api-key"]).toBe("ik_test");
+    expect(upload?.headers["content-type"]).toBeUndefined();
+    const send = sends("/api/v1/imessage/messages")[0];
+    expect(send?.body).toEqual({ conversation_id: "conv_1", text: "Here is the brief as a PDF.", media_urls: ["https://media.inkbox.ai/m/abc.pdf"] });
+    // Upload strictly before send.
+    expect(fake.calls.findIndex((c) => c.path === "/api/v1/imessage/media")).toBeLessThan(fake.calls.findIndex((c) => c.path === "/api/v1/imessage/messages"));
+  });
+
+  it("sends a new iMessage by number with no caption, and SMS through the same upload", async () => {
+    fake = fakeFetch({ ...sdkRoutes(), ...mediaRoute });
+    vi.stubGlobal("fetch", fake.fetchImpl);
+    const ch = channel();
+    await ch.sendFile({ channel: "imessage", to: "+14155550100", filename: "a.png", contentType: "image/png", content: Buffer.from([1, 2, 3]) }, ctx("chat:cli"));
+    expect(sends("/api/v1/imessage/messages")[0]?.body).toEqual({ to: "+14155550100", media_urls: ["https://media.inkbox.ai/m/abc.pdf"] });
+    await ch.sendFile({ channel: "sms", conversationKey: "sms:+14155550199", filename: "a.png", contentType: "image/png", content: Buffer.from([1, 2, 3]), caption: "pic" }, ctx("sms:+14155550199"));
+    expect(sends("/api/v1/phone/numbers/pn_1/texts")[0]?.body).toEqual({ to: "+14155550199", text: "pic", media_urls: ["https://media.inkbox.ai/m/abc.pdf"] });
+    expect(sends("/api/v1/imessage/media")).toHaveLength(2);
+  });
+
+  it("refuses files over the media cap before uploading, and over the email cap before sending", async () => {
+    fake = fakeFetch({ ...sdkRoutes(), ...mediaRoute });
+    vi.stubGlobal("fetch", fake.fetchImpl);
+    const ch = channel();
+    const big = Buffer.alloc(10 * 1024 * 1024 + 1);
+    await expect(ch.sendFile({ channel: "imessage", conversationKey: "imessage:conv_1", filename: "big.bin", contentType: "application/octet-stream", content: big }, ctx("imessage:conv_1"))).rejects.toThrow(/10\.0 MiB.*email/);
+    await expect(ch.sendFile({ channel: "sms", to: "+14155550100", filename: "big.bin", contentType: "application/octet-stream", content: big }, ctx("chat:x"))).rejects.toThrow(/SMS attachments are capped/);
+    const huge = Buffer.alloc(25 * 1024 * 1024 + 1);
+    await expect(ch.sendFile({ channel: "email", to: "a@b.co", filename: "huge.bin", contentType: "application/octet-stream", content: huge }, ctx("chat:x"))).rejects.toThrow(/email attachments are capped/);
+    expect(sends("/api/v1/imessage/media")).toHaveLength(0);
+    expect(sends("/api/v1/mail/mailboxes/maria-instinct@inkbox.ai/messages")).toHaveLength(0);
+  });
+});

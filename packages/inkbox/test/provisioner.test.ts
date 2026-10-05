@@ -117,9 +117,9 @@ describe("InkboxProvisioner: keys, webhooks, router, A2A", () => {
 
   it("reads the router info", async () => {
     const fake = fakeFetch({
-      "GET /api/v1/imessage/triage-number": { body: { number: "+16504849720", connect_command: "connect @maria-instinct", sms_link: "sms:+16504849720&body=connect%20%40maria-instinct", connect_qr_png_data_url: "data:image/png;base64,AAAA" } },
+      "GET /api/v1/imessage/triage-number": { body: { number: "+14155550199", connect_command: "connect @maria-instinct", sms_link: "sms:+14155550199&body=connect%20%40maria-instinct", connect_qr_png_data_url: "data:image/png;base64,AAAA" } },
     });
-    expect(await provisioner(fake).routerInfo()).toEqual({ number: "+16504849720", connectCommand: "connect @maria-instinct", smsLink: "sms:+16504849720&body=connect%20%40maria-instinct", qrPngDataUrl: "data:image/png;base64,AAAA" });
+    expect(await provisioner(fake).routerInfo()).toEqual({ number: "+14155550199", connectCommand: "connect @maria-instinct", smsLink: "sms:+14155550199&body=connect%20%40maria-instinct", qrPngDataUrl: "data:image/png;base64,AAAA" });
   });
 
   it("enables A2A and adds an allow rule, treating a duplicate rule as success", async () => {

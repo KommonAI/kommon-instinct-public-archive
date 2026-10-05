@@ -2,7 +2,7 @@
 # Satisfies the Maritime BYO contract: 0.0.0.0:$PORT, GET /health, POST /chat, /data, python3 on PATH.
 #
 # Port: the image sets no PORT. Maritime injects PORT=18789 for framework "custom" (8080 is
-# taken by the guest port forwarder inside the VM); docker-compose sets PORT=8080 explicitly;
+# reserved inside the VM); docker-compose sets PORT=8080 explicitly;
 # the server itself falls back to 8080 for a bare local run. EXPOSE and HEALTHCHECK follow $PORT.
 #
 # User: the process runs as the unprivileged `instinct` user. The entrypoint starts as root only

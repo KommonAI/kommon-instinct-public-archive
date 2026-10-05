@@ -4,7 +4,7 @@
  * Sends go through the official SDK's AgentIdentity so request shapes stay
  * correct as the API evolves. The identity is fetched once and cached.
  */
-import { Inkbox, type AgentIdentity } from "@inkbox/sdk";
+import { Inkbox, type AgentIdentity, type MailAttachmentInput } from "@inkbox/sdk";
 import type { InboundMessage, OutboundMessage, Outbox, Principal } from "@open-instinct/core";
 
 export interface InkboxChannelOptions {
@@ -21,6 +21,32 @@ export interface InkboxChannelOptions {
 
 /** Apple delivers long texts as one bubble; past this length they read badly. */
 export const IMESSAGE_MAX_CHARS = 1500;
+/** Inkbox's media upload cap for iMessage and SMS attachments. */
+export const MEDIA_MAX_BYTES = 10 * 1024 * 1024;
+/** A sane cap for one email attachment; most receiving servers stop around here. */
+export const EMAIL_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+
+/** A file to deliver on one channel, in the current thread or to a new recipient. */
+export interface FileSend {
+  channel: "imessage" | "sms" | "email";
+  /** Reply in this thread when set (`imessage:<id>`, `sms:<e164>`, `email:<thread>`). */
+  conversationKey?: string;
+  to?: string | string[];
+  filename: string;
+  contentType: string;
+  content: Buffer;
+  /** Text sent with the file: the iMessage bubble or the email body. */
+  caption?: string;
+  /** Email only: subject of a new thread. Replies keep the thread's subject. */
+  subject?: string;
+  replyRef?: Record<string, string | undefined>;
+}
+
+export interface FileSendResult {
+  channel: FileSend["channel"];
+  /** The reusable Inkbox media URL, for iMessage and SMS sends. */
+  mediaUrl?: string;
+}
 
 export interface ParsedKey {
   channel: "imessage" | "sms" | "email" | "a2a" | "chat" | "scheduled" | "system" | "unknown";
@@ -81,6 +107,10 @@ interface ReplyContext {
 function toList(to: string | string[] | undefined): string[] {
   if (!to) return [];
   return (Array.isArray(to) ? to : [to]).map((s) => s.trim()).filter(Boolean);
+}
+
+function describeBytes(n: number): string {
+  return n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MiB` : `${Math.ceil(n / 1024)} KiB`;
 }
 
 function replySubject(subject: string | undefined): string {
@@ -188,7 +218,33 @@ export class InkboxChannel implements Outbox {
     }
   }
 
-  private async sendEmail(msg: OutboundMessage, key: ParsedKey): Promise<void> {
+  /**
+   * Deliver a file. Email attaches it; iMessage and SMS upload it to Inkbox first and
+   * send the returned media URL with the caption as the bubble text.
+   */
+  async sendFile(file: FileSend, _ctx: { principal: Principal; conversationKey: string }): Promise<FileSendResult> {
+    const key = parseConversationKey(file.conversationKey);
+    const base: OutboundMessage = { channel: file.channel, text: file.caption ?? "" };
+    if (file.conversationKey) base.conversationKey = file.conversationKey;
+    if (file.to) base.to = file.to;
+    if (file.replyRef) base.replyRef = file.replyRef;
+    if (file.channel === "email") {
+      if (file.content.length > EMAIL_ATTACHMENT_MAX_BYTES) throw new Error(`${file.filename} is ${describeBytes(file.content.length)}; email attachments are capped at ${describeBytes(EMAIL_ATTACHMENT_MAX_BYTES)}`);
+      const msg: OutboundMessage = { ...base, text: file.caption?.trim() || `Attached: ${file.filename}` };
+      if (file.subject) msg.replyRef = { ...(msg.replyRef ?? {}), subject: file.subject };
+      await this.sendEmail(msg, key, [{ filename: file.filename, contentType: file.contentType, contentBase64: file.content.toString("base64") }]);
+      return { channel: "email" };
+    }
+    if (file.content.length > MEDIA_MAX_BYTES) throw new Error(`${file.filename} is ${describeBytes(file.content.length)}; ${file.channel === "sms" ? "SMS" : "iMessage"} attachments are capped at ${describeBytes(MEDIA_MAX_BYTES)}. Send it by email instead.`);
+    const identity = await this.identity();
+    const upload = await identity.uploadIMessageMedia({ content: new Uint8Array(file.content), filename: file.filename, contentType: file.contentType });
+    const msg: OutboundMessage = { ...base, mediaUrls: [upload.mediaUrl] };
+    if (file.channel === "sms") await this.sendSms(msg, key);
+    else await this.sendIMessage(msg, key);
+    return { channel: file.channel, mediaUrl: upload.mediaUrl };
+  }
+
+  private async sendEmail(msg: OutboundMessage, key: ParsedKey, attachments?: MailAttachmentInput[]): Promise<void> {
     const identity = await this.identity();
     const remembered = msg.conversationKey ? this.replyContexts.get(msg.conversationKey) : undefined;
     const ref = msg.replyRef ?? {};
@@ -203,6 +259,7 @@ export class InkboxChannel implements Outbox {
     const options: Parameters<AgentIdentity["sendEmail"]>[0] = { to, subject, bodyText: msg.text };
     const inReplyTo = ref.messageId ?? remembered?.messageId;
     if (inThread && inReplyTo) options.inReplyToMessageId = inReplyTo;
+    if (attachments && attachments.length > 0) options.attachments = attachments;
     await identity.sendEmail(options);
   }
 

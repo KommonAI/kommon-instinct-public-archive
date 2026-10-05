@@ -3,16 +3,32 @@
  * principal may converse at all; this file enforces the one rule policy cannot
  * express: a non-owner may only speak in their own thread or to the owner.
  */
+import fs from "node:fs";
+import path from "node:path";
 import { Type } from "typebox";
 import { defineTool, normalizeHandle, normalizePhone, textResult } from "@open-instinct/core";
-import type { Contact, ContactStore, InstinctConfig, OutboundMessage, RegisteredTool, ToolContext } from "@open-instinct/core";
-import type { InkboxChannel } from "./channel.js";
+import type { Contact, ContactStore, InstinctConfig, OutboundMessage, RegisteredTool, ToolContext, ToolResultLike } from "@open-instinct/core";
+import type { FileSend, InkboxChannel } from "./channel.js";
 import { parseConversationKey } from "./channel.js";
 
-export interface MessagingDeps {
-  channel: InkboxChannel;
+/**
+ * What send_file needs. The channel is optional: without Inkbox the tool still
+ * hands files to the dashboard chat, and refuses iMessage, SMS and email.
+ */
+export interface SendFileDeps {
+  channel?: InkboxChannel;
   contacts: ContactStore;
   config: InstinctConfig;
+  /**
+   * The state directory (`/data` on Maritime). send_file reads workspace-relative paths
+   * under `<dataDir>/workspace` and absolute paths anywhere under `dataDir`. Without it
+   * send_file refuses every path.
+   */
+  dataDir?: string;
+}
+
+export interface MessagingDeps extends SendFileDeps {
+  channel: InkboxChannel;
 }
 
 type SendChannel = "imessage" | "sms" | "email";
@@ -77,6 +93,99 @@ export function resolveTarget(to: string, deps: Pick<MessagingDeps, "contacts" |
     throw new Error(`"${raw}" matches several contacts: ${matches.map((m) => m.id).join(", ")}. Use the contact id.`);
   }
   throw new Error(`no contact, phone or email matches "${raw}"`);
+}
+
+export interface ResolvedFile {
+  /** Canonical absolute path. */
+  path: string;
+  name: string;
+  size: number;
+  mime: string;
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  heic: "image/heic",
+  svg: "image/svg+xml",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  m4a: "audio/mp4",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  txt: "text/plain",
+  md: "text/markdown",
+  csv: "text/csv",
+  json: "application/json",
+  html: "text/html",
+  ics: "text/calendar",
+  zip: "application/zip",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+};
+
+export function mimeTypeFor(filename: string): string {
+  const ext = path.extname(filename).slice(1).toLowerCase();
+  return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
+/**
+ * Turn a tool path into a readable file inside the data directory. Relative paths
+ * are workspace-relative; absolute paths must stay under the data directory after
+ * symlinks are followed. Throws with a plain reason otherwise.
+ */
+export function resolveFilePath(dataDir: string, requested: string): ResolvedFile {
+  const raw = requested.trim();
+  if (!raw || raw.includes("\0")) throw new Error("`path` is empty");
+  const root = realpathOr(path.resolve(dataDir));
+  const candidate = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(root, "workspace", raw);
+  if (!fs.existsSync(candidate)) throw new Error(`no file at ${raw}`);
+  const real = realpathOr(candidate);
+  if (!real.startsWith(root + path.sep)) throw new Error(`Refused: "${raw}" is outside the data directory`);
+  const stat = fs.statSync(real);
+  if (!stat.isFile()) throw new Error(`${raw} is not a file`);
+  return { path: real, name: path.basename(real), size: stat.size, mime: mimeTypeFor(real) };
+}
+
+function realpathOr(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/** The fence Maritime's `maritime-share` prints; the dashboard renders it as an attachment. */
+export function maritimeFileFence(file: ResolvedFile, extra: { title?: string; message?: string } = {}): string {
+  const payload: Record<string, string | number> = { path: file.path, name: file.name, size: file.size, mime: file.mime };
+  if (extra.title) payload.title = extra.title;
+  if (extra.message) payload.message = extra.message;
+  return "```maritime-file\n" + JSON.stringify(payload) + "\n```";
+}
+
+const sendFileParams = Type.Object({
+  path: Type.String({ description: "The file: a workspace-relative path (research/brief.pdf) or an absolute path under the data directory." }),
+  to: Type.Optional(
+    Type.String({
+      description: 'Recipient: a contact id or name, a phone number, an email address, or "owner". Omit to send in the current conversation.',
+    }),
+  ),
+  channel: Type.Optional(
+    Type.Union([Type.Literal("imessage"), Type.Literal("sms"), Type.Literal("email")], {
+      description: "Force a channel. Default: iMessage for phones, email for addresses. Email for anything over a few MB or a few pages.",
+    }),
+  ),
+  caption: Type.Optional(Type.String({ description: "One line sent with the file (the iMessage bubble or the email body)." })),
+  subject: Type.Optional(Type.String({ description: "Email subject when starting a new email thread." })),
+});
+
+function fail(text: string): ToolResultLike {
+  return { content: [{ type: "text", text }], isError: true };
 }
 
 function isOwner(ctx: ToolContext): boolean {
@@ -187,5 +296,71 @@ export function messagingTools(deps: MessagingDeps): RegisteredTool[] {
     },
   });
 
-  return [sendMessage, sendTyping, react];
+  return [sendMessage, sendTyping, react, sendFileTool(deps)];
+}
+
+/**
+ * send_file on its own, for an agent without Inkbox: the dashboard chat still gets
+ * the file; anything that needs a wire is refused with a plain reason.
+ */
+export function sendFileTool(deps: SendFileDeps): RegisteredTool {
+  const wire = (): InkboxChannel => {
+    if (!deps.channel) throw new Error("Inkbox is not configured, so files can only be shared in the dashboard chat here.");
+    return deps.channel;
+  };
+  return defineTool({
+    name: "send_file",
+    label: "Send file",
+    description:
+      "Send a file from the workspace as an attachment. With no `to`, sends in the current conversation (iMessage, SMS, email, or the dashboard chat). With `to`, sends to a contact, a phone number, an email address, or the owner. iMessage and SMS take files up to 10 MB; use email for bigger files.",
+    parameters: sendFileParams,
+    meta: {
+      capabilities: ["converse", "files.read"],
+      group: "messaging",
+      describe: (args) => {
+        const a = args as { to?: string; path?: string };
+        return `send_file ${a.path ?? ""} to ${a.to ?? "current conversation"}`;
+      },
+    },
+    execute: async (args, ctx) => {
+      if (!deps.dataDir) return fail("File sending is not configured (no data directory).");
+      let file: ResolvedFile;
+      try {
+        file = resolveFilePath(deps.dataDir, args.path);
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err));
+      }
+      const caption = args.caption?.trim();
+      const content = () => fs.readFileSync(file.path);
+      const base = (): Omit<FileSend, "channel"> => ({ filename: file.name, contentType: file.mime, content: content(), ...(caption ? { caption } : {}) });
+
+      if (!args.to) {
+        const key = parseConversationKey(ctx.conversationKey);
+        if (key.channel === "chat") {
+          // The Maritime dashboard turns this fence into an attachment; elsewhere it still names the file.
+          const fence = maritimeFileFence(file, { ...(args.subject ? { title: args.subject } : {}), ...(caption ? { message: caption } : {}) });
+          return textResult(`${file.path} (${file.size} bytes) is ready. Paste this block verbatim in your reply so the dashboard attaches it:\n${fence}`);
+        }
+        if (key.channel === "a2a") throw new Error("This is an agent-to-agent conversation; files cannot be attached to it. Give `to` to send it to a person.");
+        if (key.channel !== "imessage" && key.channel !== "sms" && key.channel !== "email") {
+          throw new Error(`Cannot send a file on "${ctx.conversationKey}". Give \`to\` to pick a recipient.`);
+        }
+        const send: FileSend = { ...base(), channel: key.channel, conversationKey: ctx.conversationKey };
+        if (args.subject) send.subject = args.subject;
+        await wire().sendFile(send, { principal: ctx.principal, conversationKey: ctx.conversationKey });
+        return textResult(`Sent ${file.name} in the current ${key.channel} conversation.`);
+      }
+
+      const wantsOwner = args.to.trim().toLowerCase() === "owner";
+      if (!isOwner(ctx) && !wantsOwner) {
+        throw new Error(`${ctx.principal.displayName} may only send files here or to the owner (to: "owner").`);
+      }
+      const target = resolveTarget(args.to, deps, args.channel);
+      const send: FileSend = { ...base(), channel: target.channel, to: target.to };
+      if (target.channel === "email") send.subject = args.subject ?? (wantsOwner && !isOwner(ctx) ? `File from ${ctx.principal.displayName}` : `${file.name} from your Instinct`);
+      if (!isOwner(ctx) && wantsOwner) send.caption = `From ${ctx.principal.displayName}: ${caption ?? file.name}`;
+      await wire().sendFile(send, { principal: ctx.principal, conversationKey: ctx.conversationKey });
+      return textResult(`Sent ${file.name} to ${target.label} via ${target.channel}.`);
+    },
+  });
 }

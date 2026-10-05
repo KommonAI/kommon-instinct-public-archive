@@ -35,6 +35,7 @@ Node 22.19 or newer is required.
 | `COMPOSIO_API_KEY`, `COMPOSIO_TOOLKITS` | `init`, `dev`, `deploy` | Gmail, Calendar and other apps through Composio. `init` turns `apps.enabled` on when either is set; `dev` warns when the key is set but apps are off |
 | `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET`, `LINK_REDIRECT_URI`, `STRIPE_PUBLISHABLE_KEY` | `deploy`, `payments` | Stripe Link Agent Wallet. `deploy` copies them into the agent when `LINK_CLIENT_ID` is set; `payments connect` uses them to build the authorize URL when no server offers one |
 | `BRAVE_SEARCH_API_KEY` | `dev`, `deploy` | optional web search key |
+| `VISUAL`, `EDITOR` | `persona edit` | the editor to open `PERSONA.md` in; without one the path is printed |
 | `NO_COLOR` | all | disables ANSI colors |
 | `INSTINCT_DEBUG` | all | prints stack traces on unexpected errors |
 
@@ -208,6 +209,42 @@ exchange still needs a server. Behind the gateway, the redirect lands on
 of `GET /`) and whether `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET`, `LINK_REDIRECT_URI` and
 `STRIPE_PUBLISHABLE_KEY` are set locally. Values are never printed, only `set` or `missing`.
 
+### `instinct persona`
+
+```
+instinct persona show
+instinct persona edit
+instinct persona set "<text>"
+instinct persona reset
+instinct persona path
+```
+
+`PERSONA.md` in the data directory is the identity section of the agent's system prompt:
+its voice, texting style and what it never does. The first boot writes the built-in default
+(or `INSTINCT_PERSONA` from the environment); after that the file is yours. `show` prints
+what is in effect, the default included when no file exists yet. `edit` opens the file in
+`$VISUAL` or `$EDITOR` and writes the default first when there is nothing to edit; with no
+editor set it prints the path. `set` replaces the file with the text given. `reset` puts
+the default back. The server reads the file on every message, so a change applies to the
+next reply. The agent's name is `agent.name` in `config.json`: `instinct init --name <you>
+--agent-name "Pip"`. [docs/CUSTOMIZE.md](../../docs/CUSTOMIZE.md) covers the other layers
+(`AGENTS.md`, skills, memory, policy).
+
+### `instinct prompt`
+
+```
+instinct prompt [--channel imessage|sms|email|a2a|chat|scheduled|system] [--layers] [--json] [--no-skills]
+```
+
+Prints the system prompt your own conversation would get right now, built from the data
+directory with you as the owner: `config.json`, `PERSONA.md`, `AGENTS.md`, the memory
+digest, your capabilities from `policy.json`, pending approvals and the skills index. No
+server or model key is needed. `--layers` prints one row per section (id, length, the file
+that decides it) instead of the text; `--json` prints the sections as data. The skills
+index comes from `$INSTINCT_SKILLS_DIR` or `<repo>/skills`; `--no-skills` leaves it out.
+A running agent adds the tool groups it wired (messaging, computer, apps) and the network
+guidance for whoever it is talking to; the text of every file is the same.
+
 ### `instinct schedules`
 
 ```
@@ -241,7 +278,7 @@ Identity ready: @maria-instinct  maria-instinct@inkboxmail.com  iMessage on
 Secrets written to /Users/maria/.instinct/secrets/inkbox.json (mode 0600).
 
 Connect your iMessage
-  1. Text connect @maria-instinct to +1 650 484 9720
+  1. Text connect @maria-instinct to +1 415 555 0100
   2. A new thread from your Instinct appears. Say hi.
 
 # 2. Run it on your laptop with webhooks tunneled in.
@@ -303,6 +340,7 @@ carry `fetchImpl`, `createProvisioner`, `importServer`, `connectTunnel` and
 <dataDir>/contacts.json          people and tiers (invite, trust set)
 <dataDir>/policy.json            grants and spend policy (trust grant/revoke)
 <dataDir>/schedules.json         proactive jobs (schedules)
+<dataDir>/PERSONA.md             the agent's voice (persona set/edit/reset)
 <dataDir>/secrets/inkbox.json    identity key, signing key, handle (init; 0600)
 <dataDir>/maritime.json          the deployed agent id (deploy)
 <dataDir>/connect-qr.png         QR for the connect text (connect)

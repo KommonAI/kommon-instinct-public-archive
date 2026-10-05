@@ -41,11 +41,18 @@ People and trust
   trust   Change tiers and scoped grants. Tiers: partner, family, friend, contact, stranger.
           instinct trust grant sam-lee calendar.write,plans.commit --until 2026-10-12 --max-usd 150 --note &quot;dinner this week&quot;
 
+Customize
+  persona  Read or change &lt;dataDir&gt;/PERSONA.md: the agent&#x27;s name, voice, texting style and limits.
+           instinct persona set &quot;You are Pip. Dry wit, short sentences, never emojis.&quot;
+  prompt   Print the system prompt your own conversation would get right now, built from the data dir.
+           instinct prompt --layers
+
 Proactive
   schedules  Cron or one-shot prompts the agent runs for you, delivered over iMessage.
              instinct schedules add &quot;0 8 * * 1-5&quot; &quot;Morning briefing: calendar, weather, top emails&quot; --tz America/New_York
 
 Global: --data-dir &lt;dir&gt; (default $INSTINCT_DATA_DIR or ./.instinct), --help, --version
 
-Env: INSTINCT_DATA_DIR, INKBOX_ADMIN_API_KEY, MARITIME_API_KEY, ANTHROPIC_API_KEY, COMPOSIO_API_KEY, COMPOSIO_TOOLKITS, LINK_CLIENT_ID
+Env: INSTINCT_DATA_DIR, INKBOX_ADMIN_API_KEY, MARITIME_API_KEY, ANTHROPIC_API_KEY, COMPOSIO_API_KEY, COMPOSIO_TOOLKITS, LINK_CLIENT_ID, EDITOR
+Customize the agent (persona, instructions, skills, memory, tiers): docs/CUSTOMIZE.md
 </pre></div></body></html>

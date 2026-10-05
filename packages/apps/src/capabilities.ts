@@ -25,6 +25,13 @@ export const CONTACTS_WRITE: readonly Capability[] = ["contacts.read", "memory.w
  * a call needs. The policy engine checks every capability against the caller's
  * tier, so this table decides what a partner or a friend can do through the
  * owner's connected apps. Keep it conservative: an unknown slug is owner-only.
+ *
+ * Gmail, Google Calendar and Google Contacts have exact rows. Every other toolkit
+ * (Slack, Notion, Stripe, the Composio meta tools, ...) gets the owner-only
+ * `APPS_MANAGE` pair, plus a stricter tag when the slug looks like it sends a
+ * message, changes a calendar or moves money. The extra tag is what keeps a grant
+ * on `apps.use` + `trust.manage` from quietly opening payments, and `purchase` puts
+ * the owner's own calls under the spend policy, which asks when no amount is known.
  */
 export function capabilitiesForSlug(slug: string): Capability[] {
   const s = slug.trim().toUpperCase();
@@ -48,7 +55,31 @@ export function capabilitiesForSlug(slug: string): Capability[] {
   // Meta tools (manage connections, search, multi-execute) and every toolkit without
   // a row above are owner-only. COMPOSIO_MULTI_EXECUTE_TOOL can run any tool in one
   // call, so per-tool capabilities cannot be checked for it. See README.
-  return [...APPS_MANAGE];
+  return [...sensitiveCapabilitiesForSlug(s), ...APPS_MANAGE];
+}
+
+/**
+ * Stricter tags for a slug outside the Google rows, judged by the words in it.
+ * Reads (GET, LIST, SEARCH, ...) get nothing. Writes get:
+ * - `email.send` when the slug sends, replies, forwards or drafts a message;
+ * - `calendar.write` when it creates, changes or cancels a calendar event or meeting;
+ * - `purchase` when it pays, charges, refunds, transfers, checks out, or places an
+ *   order, and for any write in a payment toolkit (Stripe, PayPal, ...).
+ * The result is empty for an ordinary write such as NOTION_CREATE_PAGE.
+ */
+export function sensitiveCapabilitiesForSlug(slug: string): Capability[] {
+  const tokens = slug.trim().toUpperCase().split("_").filter(Boolean);
+  if (tokens.length < 2) return [];
+  const toolkit = tokens[0] ?? "";
+  const action = tokens.slice(1);
+  if (action.some((t) => READ_VERBS.has(t))) return [];
+  const has = (set: ReadonlySet<string>): boolean => action.some((t) => set.has(t));
+
+  const out: Capability[] = [];
+  if (has(SEND_VERBS) || (has(DRAFT_VERBS) && has(MAIL_NOUNS))) out.push("email.send");
+  if (has(CALENDAR_NOUNS) && has(CALENDAR_WRITE_VERBS)) out.push("calendar.write");
+  if (has(MONEY_WORDS) || (has(ORDER_NOUNS) && has(ORDER_VERBS)) || PAYMENT_TOOLKITS.has(toolkit)) out.push("purchase");
+  return out;
 }
 
 const GMAIL_SEND: ReadonlySet<string> = new Set([
@@ -90,6 +121,25 @@ export const COMPOSIO_META_TOOLS: readonly string[] = [
   "COMPOSIO_SEARCH_TOOLS",
   "COMPOSIO_MULTI_EXECUTE_TOOL",
 ];
+
+/** A slug with one of these words after the toolkit is a read; it gets no stricter tag. */
+const READ_VERBS: ReadonlySet<string> = new Set(["GET", "LIST", "RETRIEVE", "SEARCH", "FETCH", "FIND", "READ", "DESCRIBE", "COUNT", "LOOKUP", "QUERY"]);
+const SEND_VERBS: ReadonlySet<string> = new Set(["SEND", "REPLY", "FORWARD"]);
+const DRAFT_VERBS: ReadonlySet<string> = new Set(["DRAFT", "COMPOSE"]);
+const MAIL_NOUNS: ReadonlySet<string> = new Set(["EMAIL", "EMAILS", "MAIL", "MESSAGE", "MESSAGES"]);
+const CALENDAR_NOUNS: ReadonlySet<string> = new Set(["CALENDAR", "EVENT", "EVENTS", "MEETING", "MEETINGS", "APPOINTMENT", "BOOKING"]);
+const CALENDAR_WRITE_VERBS: ReadonlySet<string> = new Set(["CREATE", "UPDATE", "DELETE", "PATCH", "ADD", "CANCEL", "RESCHEDULE", "MOVE", "QUICK", "SCHEDULE", "BOOK"]);
+const MONEY_WORDS: ReadonlySet<string> = new Set([
+  "PAY", "PAYMENT", "PAYMENTS", "PAYOUT", "PAYOUTS", "CHARGE", "CHARGES", "REFUND", "REFUNDS",
+  "TRANSFER", "TRANSFERS", "CHECKOUT", "PURCHASE", "PURCHASES", "BUY",
+]);
+const ORDER_NOUNS: ReadonlySet<string> = new Set(["ORDER", "ORDERS"]);
+const ORDER_VERBS: ReadonlySet<string> = new Set(["CREATE", "PLACE", "SUBMIT", "UPDATE", "CANCEL", "FULFILL", "COMPLETE", "CAPTURE", "CLOSE"]);
+/** Toolkits whose every write moves or touches money. Composio slugs, uppercased. */
+export const PAYMENT_TOOLKITS: ReadonlySet<string> = new Set([
+  "STRIPE", "PAYPAL", "SQUARE", "SQUAREUP", "BRAINTREE", "RAZORPAY", "ADYEN", "COINBASE", "WISE", "VENMO",
+  "GUMROAD", "LEMONSQUEEZY", "CHARGEBEE", "RECURLY", "PADDLE", "MERCURY", "BREX", "RAMP", "REVOLUT",
+]);
 
 /** Toolkit slug of a Composio tool: the part before the first underscore, lowercased. */
 export function toolkitOfSlug(slug: string): string {
