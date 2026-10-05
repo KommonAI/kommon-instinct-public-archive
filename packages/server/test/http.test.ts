@@ -547,6 +547,26 @@ describe("payments callback", () => {
   });
 });
 
+describe("payments routes for the CLI", () => {
+  it("serve the authorize URL and connection state behind the chat token, and 404 without payments", async () => {
+    const app = stubApp();
+    const server = createHttpServer(app, { env: { INSTINCT_CHAT_TOKEN: "tok" } });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const auth = { authorization: "Bearer tok" };
+    try {
+      expect((await fetch(`${base}/oauth/link/start`, { headers: auth })).status).toBe(404);
+      expect((await fetch(`${base}/payments/status`, { headers: auth })).status).toBe(404);
+      app.wallet = { handleCallback: async () => undefined, isConnected: () => false, authorizeUrl: () => ({ url: "https://login.link.com/auth?state=s1", state: "s1" }) };
+      expect((await fetch(`${base}/oauth/link/start`)).status).toBe(401);
+      expect(await (await fetch(`${base}/oauth/link/start`, { headers: auth })).json()).toEqual({ url: "https://login.link.com/auth?state=s1" });
+      expect(await (await fetch(`${base}/payments/status`, { headers: auth })).json()).toEqual({ connected: false });
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
+
 describe("matchScheduleEntry", () => {
   const entries: ScheduleEntry[] = [
     { id: "s_a", enabled: true, prompt: "Send the brief", createdAt: "" },

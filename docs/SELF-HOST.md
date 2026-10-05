@@ -300,7 +300,7 @@ More in the [computer package README](../packages/computer/README.md).
 
 `POST /chat`, `GET /status` and `GET /schedules` run with the full owner tool set. Anyone who can reach them is you, as far as the agent is concerned. Two guards exist.
 
-1. Bind address. A bare `node packages/server/dist/main.js` with no `PORT` listens on `127.0.0.1` only. `instinct dev` is different: it sets `PORT` and binds `0.0.0.0` unless you pass `--host 127.0.0.1`. Compose publishes `127.0.0.1:8080` on the host, so the container port is not reachable from outside.
+1. Bind address. A bare `node packages/server/dist/main.js` with no `PORT` listens on `127.0.0.1` only. `instinct dev` also binds `127.0.0.1` unless you pass `--host 0.0.0.0`. Compose publishes `127.0.0.1:8080` on the host, so the container port is not reachable from outside.
 2. Token. Set `INSTINCT_CHAT_TOKEN` to a random string. Every call must then send `Authorization: Bearer <token>` (or `X-Instinct-Token: <token>`) or it gets 401.
 
 ```bash
@@ -308,7 +308,7 @@ export INSTINCT_CHAT_TOKEN=$(openssl rand -hex 24)
 instinct dev --host 127.0.0.1 --tunnel
 ```
 
-One caveat. The CLI does not send the token today. With a token set, `instinct chat` and `instinct status` get 401. Talk to the agent with curl instead:
+`instinct chat` and `instinct status` read `INSTINCT_CHAT_TOKEN` from the environment and send it as `Authorization: Bearer <token>`, so export the same value in the shell you run them from. Any other client sends the header itself:
 
 ```bash
 curl -s http://127.0.0.1:8080/chat \
@@ -317,7 +317,7 @@ curl -s http://127.0.0.1:8080/chat \
   -d '{"message":"hi"}'
 ```
 
-Or keep the token off, bind loopback with `--host 127.0.0.1`, and use the CLI as normal. On a laptop that is enough. On a VPS, set the token.
+Or keep the token off and leave `instinct dev` on loopback. On a laptop that is enough. On a VPS, set the token.
 
 The tunnel does not change any of this. It carries signed webhooks only and never reaches `/chat`.
 

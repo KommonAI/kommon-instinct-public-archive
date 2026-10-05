@@ -264,6 +264,25 @@ describe("chat", () => {
     expect(r.code).toBe(1);
     expect(r.err).toContain("asleep");
   });
+
+  it("sends INSTINCT_CHAT_TOKEN as a Bearer header on chat and status, and explains a 401", async () => {
+    const { fetch, calls } = fakeFetch({
+      "http://127.0.0.1:8080/chat": () => json({ response: "ok" }),
+      "http://127.0.0.1:8080/": () => json({ ok: true }),
+    });
+    const env = { INSTINCT_DATA_DIR: tmpDir(), INSTINCT_CHAT_TOKEN: "tok_1" };
+    expect((await run(["chat", "ping"], env, { fetchImpl: fetch })).code).toBe(0);
+    expect((await run(["status"], env, { fetchImpl: fetch })).code).toBe(0);
+    for (const c of calls) expect((c.init.headers as Record<string, string>).Authorization).toBe("Bearer tok_1");
+
+    const locked = fakeFetch({ "http://127.0.0.1:8080/chat": () => json({ error: "missing or invalid token" }, 401), "http://127.0.0.1:8080/": () => json({}, 401) });
+    const chat = await run(["chat", "ping"], { INSTINCT_DATA_DIR: tmpDir() }, { fetchImpl: locked.fetch });
+    expect(chat.code).toBe(1);
+    expect(chat.err).toContain("INSTINCT_CHAT_TOKEN");
+    const status = await run(["status"], { INSTINCT_DATA_DIR: tmpDir() }, { fetchImpl: locked.fetch });
+    expect(status.code).toBe(1);
+    expect(status.err).toContain("INSTINCT_CHAT_TOKEN");
+  });
 });
 
 describe("status", () => {

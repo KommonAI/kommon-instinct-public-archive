@@ -122,7 +122,8 @@ instinct chat "<message>" [--url http://127.0.0.1:8080] [--agent <maritimeAgentI
 
 Without `--agent` it posts to the local server's `/chat`. With `--agent` it goes through
 `POST https://api.maritime.sh/api/agents/<id>/chat` with `MARITIME_API_KEY`, which wakes a
-sleeping agent. `--conversation` keeps several messages in one thread.
+sleeping agent. `--conversation` keeps several messages in one thread. When
+`INSTINCT_CHAT_TOKEN` is set, local calls send it as `Authorization: Bearer <token>`.
 
 ### `instinct status`
 
@@ -130,7 +131,7 @@ sleeping agent. `--conversation` keeps several messages in one thread.
 instinct status [--url http://127.0.0.1:8080]
 ```
 
-Fetches `GET /` (falls back to `/health`) and prints a flattened key/value table: agent
+Fetches `GET /` (falls back to `/health`), sending `INSTINCT_CHAT_TOKEN` when set, and prints a flattened key/value table: agent
 name, owner, model, computer kind, connected apps, conversation counts, uptime.
 
 ### `instinct deploy`

@@ -9,7 +9,7 @@ import { parse, str, type OptionSpec } from "../args.js";
 import { table } from "../ansi.js";
 import type { CliContext } from "../context.js";
 import { CliError, UsageError, fetchOf } from "../io.js";
-import { DEFAULT_LOCAL_URL } from "../local.js";
+import { DEFAULT_LOCAL_URL, authHeaders } from "../local.js";
 
 export const paymentsOptions: OptionSpec = {
   url: { type: "string" },
@@ -33,10 +33,10 @@ function pickUrl(body: Json): string | undefined {
   return undefined;
 }
 
-async function getJson(f: typeof fetch, url: string): Promise<{ status: number; body?: Json; location?: string } | undefined> {
+async function getJson(f: typeof fetch, url: string, token?: string): Promise<{ status: number; body?: Json; location?: string } | undefined> {
   let res: Response;
   try {
-    res = await f(url, { headers: { Accept: "application/json" }, redirect: "manual" });
+    res = await f(url, { headers: { Accept: "application/json", ...authHeaders(token) }, redirect: "manual" });
   } catch {
     return undefined;
   }
@@ -53,9 +53,10 @@ async function getJson(f: typeof fetch, url: string): Promise<{ status: number; 
 }
 
 /** Ask the running server for its Link authorize URL. Undefined when it has no such route. */
-export async function serverAuthorizeUrl(f: typeof fetch, baseUrl: string): Promise<string | undefined> {
-  const res = await getJson(f, `${baseUrl.replace(/\/+$/, "")}${LINK_START_PATH}`);
+export async function serverAuthorizeUrl(f: typeof fetch, baseUrl: string, token?: string): Promise<string | undefined> {
+  const res = await getJson(f, `${baseUrl.replace(/\/+$/, "")}${LINK_START_PATH}`, token);
   if (!res) throw new CliError(`Could not reach ${baseUrl}. Is \`instinct dev\` running? Pass --url for another server.`);
+  if (res.status === 401) throw new CliError(`${baseUrl} wants a chat token. Set INSTINCT_CHAT_TOKEN to the server's value.`);
   if (res.status >= 300 && res.status < 400 && res.location) return res.location;
   if (res.status === 200 && res.body) return pickUrl(res.body);
   return undefined;
@@ -81,7 +82,7 @@ export function buildAuthorizeUrl(env: NodeJS.ProcessEnv, baseUrl: string, state
 
 export async function runPaymentsConnect(ctx: CliContext, baseUrl: string): Promise<number> {
   const { c } = ctx;
-  const fromServer = await serverAuthorizeUrl(fetchOf(ctx.io), baseUrl);
+  const fromServer = await serverAuthorizeUrl(fetchOf(ctx.io), baseUrl, ctx.env.INSTINCT_CHAT_TOKEN);
   if (fromServer) {
     ctx.print(c.bold("Connect your Link wallet"));
     ctx.print(`  Open this in a browser and approve. Link sends you back to your Instinct, which confirms over iMessage.`);
@@ -98,7 +99,8 @@ export async function runPaymentsStatus(ctx: CliContext, baseUrl: string): Promi
   const { c } = ctx;
   const f = fetchOf(ctx.io);
   const root = baseUrl.replace(/\/+$/, "");
-  const res = await getJson(f, `${root}${PAYMENTS_STATUS_PATH}`);
+  const token = ctx.env.INSTINCT_CHAT_TOKEN;
+  const res = await getJson(f, `${root}${PAYMENTS_STATUS_PATH}`, token);
   if (!res) throw new CliError(`Could not reach ${baseUrl}. Is \`instinct dev\` running? Pass --url for another server.`);
   ctx.print(c.bold(`Payments at ${baseUrl}`));
   let rows: string[][] | undefined;
@@ -106,7 +108,7 @@ export async function runPaymentsStatus(ctx: CliContext, baseUrl: string): Promi
     rows = Object.entries(res.body).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)]);
   } else {
     // Older servers report payments inside GET /.
-    const status = await getJson(f, `${root}/`);
+    const status = await getJson(f, `${root}/`, token);
     const payments = status?.body?.["payments"];
     if (payments && typeof payments === "object") {
       rows = Object.entries(payments as Json).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)]);

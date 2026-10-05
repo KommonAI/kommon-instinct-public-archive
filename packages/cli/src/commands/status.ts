@@ -30,7 +30,7 @@ export function flattenStatus(value: Record<string, unknown>, prefix = ""): stri
 export async function runStatus(ctx: CliContext, argv: string[]): Promise<number> {
   const { values } = parse("status", argv, statusOptions);
   const url = str(values, "url") ?? DEFAULT_LOCAL_URL;
-  const info = await localStatus(fetchOf(ctx.io), url);
+  const info = await localStatus(fetchOf(ctx.io), url, ctx.env.INSTINCT_CHAT_TOKEN);
   ctx.print(ctx.c.bold(`Open Instinct at ${url}`));
   ctx.print(table(flattenStatus(info)));
   return 0;

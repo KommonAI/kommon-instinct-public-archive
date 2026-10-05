@@ -25,7 +25,7 @@ export async function runChat(ctx: CliContext, argv: string[]): Promise<number> 
     if (!apiKey) throw new CliError("MARITIME_API_KEY is required for --agent.");
     result = await chatWithAgent({ apiKey, baseUrl: maritimeBaseUrl(ctx.env), fetchImpl: f }, agent, message, conversationId);
   } else {
-    result = await localChat(f, str(values, "url") ?? DEFAULT_LOCAL_URL, { message, source: "cli", conversation_id: conversationId });
+    result = await localChat(f, str(values, "url") ?? DEFAULT_LOCAL_URL, { message, source: "cli", conversation_id: conversationId }, ctx.env.INSTINCT_CHAT_TOKEN);
   }
   if (result.response === null || result.response === undefined) {
     throw new CliError(`The agent did not answer${result.error ? `: ${result.error}` : "."}`);
