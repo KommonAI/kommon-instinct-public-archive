@@ -37,7 +37,7 @@ import { describeDataPart, promptExtraFor } from "./hooks.js";
 import { appsNotConfiguredTool, setupSummaryFor } from "./setup-summary.js";
 import { createScheduleSync, type ScheduleSync } from "./maritime-schedules.js";
 import { loadPaymentsModule, paymentsEnv, type LinkWalletLike, type PaymentsModule } from "./payments.js";
-import { loadSkillsPrompt, resolveSkillsDir } from "./skills.js";
+import { formatSkillsIndex, loadSkillList, loadSkillTool, resolveSkillsDir } from "./skills.js";
 
 export interface BootOptions {
   streamFn?: StreamFn;
@@ -267,8 +267,12 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   }
 
   const skillsDir = resolveSkillsDir({ explicit: opts.skillsDir, env, packageUrl: import.meta.url });
-  const skills = loadSkillsPrompt(skillsDir, log);
-  if (skills) promptSections.push(skills);
+  const skillList = loadSkillList(skillsDir, log);
+  const skills = formatSkillsIndex(skillList);
+  if (skills) {
+    promptSections.push(skills);
+    registry.register(loadSkillTool(skillList));
+  }
   const skillsPrompt = promptSections.length > 0 ? promptSections.join("\n\n") : undefined;
 
   const runtime = new AgentRuntime({

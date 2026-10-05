@@ -28,9 +28,8 @@ skills/
 ```
 
 One directory per skill, named like the skill. The file is always `SKILL.md`.
-A skill directory may hold extra files (a template, a checklist) that the
-SKILL.md references by relative path; the loader does not recurse into a
-directory once it finds a SKILL.md.
+Keep everything the skill needs in that one file: `load_skill` returns
+`SKILL.md` only.
 
 ## Format
 
@@ -73,35 +72,30 @@ skipped with a warning diagnostic.
 
 ## How the server loads skills
 
-In `@open-instinct/server`, at agent start:
+At agent start `@open-instinct/server` (`packages/server/src/skills.ts`) loads
+every `SKILL.md` with Pi's `loadSkillsFromDir`, logs any diagnostics, and adds
+two things:
 
-```ts
-import { loadSkillsFromDir, formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
+- An `<available_skills>` block in the system prompt with each skill's name and
+  description, telling the model to call `load_skill` when a task matches.
+  Skills with `disable-model-invocation: true` are left out of the block.
+- The `load_skill` tool. It takes a skill name and returns that skill's
+  `SKILL.md`. Only skills found at boot can be named, so the model never passes
+  a path. It needs only the `converse` capability, so skills work in every
+  conversation, not just the owner's.
 
-const { skills, diagnostics } = loadSkillsFromDir({ dir: skillsDir, source: "project" });
-for (const d of diagnostics) log.warn("skill", d.path, d.message);
-const skillsIndex = formatSkillsForPrompt(skills, "read");
-```
+This replaces Pi's default of loading skills with the `read` tool. `read` is
+confined to `workspace/` and is owner-only, so it could not open the skills
+folder. `load_skill` returns `SKILL.md` only, so keep a skill self-contained
+rather than pointing at extra files beside it.
 
 `skillsDir` is `/app/skills` in the Maritime image (copied by
-`deploy/Dockerfile.agent`) and `<repo>/skills` in local dev. The owner may add
-their own under `$INSTINCT_DATA_DIR/skills`; load that directory second so a
-same-named skill there wins by being listed first (`loadSkills` reports name
-collisions as diagnostics).
-
-`formatSkillsForPrompt` returns an `<available_skills>` block listing each
-skill's name, description and absolute file path, plus a sentence telling the
-model to use the `read` tool to load the file when the task matches. The prompt
-builder in `core` appends that block to the system prompt. Skills with
-`disable-model-invocation: true` are left out of the block.
-
-Because the model loads a skill by reading its file, the `read` tool must be
-allowed to read the skills directory in addition to `workspace/`. Either pass
-the skills directory as a second root to the read tool, or copy `skills/` into
-`workspace/.skills/` at boot and point `skillsDir` there.
+`deploy/Dockerfile.agent`), `<repo>/skills` in local dev, or
+`$INSTINCT_SKILLS_DIR`. Owner skills under `$INSTINCT_DATA_DIR/skills` are not
+loaded yet.
 
 Scheduled jobs call skills by name in their prompt ("Run the daily-brief skill
-for the owner"). The model then reads that file like any other.
+for the owner"). The model then calls `load_skill` with that name.
 
 ## Adding a skill
 

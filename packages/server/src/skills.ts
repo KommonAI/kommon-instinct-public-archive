@@ -2,9 +2,11 @@
  * SKILL.md playbooks. The repo ships a `skills/` folder; the Docker image copies it
  * to /app/skills. Loading is best effort: a missing folder means no skills section.
  */
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { formatSkillsForPrompt, loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
+import { Type } from "@earendil-works/pi-ai";
+import { loadSkillsFromDir, type Skill } from "@earendil-works/pi-coding-agent";
+import { defineTool, textResult, type RegisteredTool } from "@open-instinct/core";
 
 export interface ResolveSkillsDirOptions {
   explicit?: string;
@@ -37,17 +39,73 @@ function isDir(p: string): boolean {
   }
 }
 
-/** Prompt section listing the skills, or undefined when there is nothing to show. */
-export function loadSkillsPrompt(dir: string | undefined, logger?: (m: string) => void): string | undefined {
-  if (!dir || !isDir(dir)) return undefined;
+/** Skills in `dir`, or an empty list when the folder is missing or unreadable. */
+export function loadSkillList(dir: string | undefined, logger?: (m: string) => void): Skill[] {
+  if (!dir || !isDir(dir)) return [];
   try {
     const { skills, diagnostics } = loadSkillsFromDir({ dir, source: "open-instinct" });
     for (const d of diagnostics) logger?.(`skill warning: ${JSON.stringify(d)}`);
-    if (skills.length === 0) return undefined;
-    logger?.(`loaded ${skills.length} skills from ${dir}`);
-    return formatSkillsForPrompt(skills, "read");
+    if (skills.length > 0) logger?.(`loaded ${skills.length} skills from ${dir}`);
+    return skills;
   } catch (err) {
     logger?.(`skills not loaded from ${dir}: ${(err as Error).message}`);
-    return undefined;
+    return [];
   }
+}
+
+export const LOAD_SKILL_TOOL = "load_skill";
+
+/**
+ * The skills index for the prompt. It points at load_skill rather than Pi's default
+ * of the read tool: read is confined to workspace/ and is owner-only, so a skill
+ * path outside the workspace could never be opened, and nobody but the owner could
+ * open one at all.
+ */
+export function formatSkillsIndex(skills: Skill[]): string | undefined {
+  const visible = skills.filter((s) => !s.disableModelInvocation);
+  if (visible.length === 0) return undefined;
+  const lines = [
+    "The following skills provide specialized instructions for specific tasks.",
+    `When a task matches a skill's description, call ${LOAD_SKILL_TOOL} with its name and follow what it says.`,
+    "",
+    "<available_skills>",
+  ];
+  for (const s of visible) {
+    lines.push("  <skill>", `    <name>${escapeXml(s.name)}</name>`, `    <description>${escapeXml(s.description)}</description>`, "  </skill>");
+  }
+  lines.push("</available_skills>");
+  return lines.join("\n");
+}
+
+function escapeXml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+/** Prompt section listing the skills, or undefined when there is nothing to show. */
+export function loadSkillsPrompt(dir: string | undefined, logger?: (m: string) => void): string | undefined {
+  return formatSkillsIndex(loadSkillList(dir, logger));
+}
+
+/**
+ * Returns one skill's SKILL.md by name. Only skills found at boot can be named, so the
+ * model never supplies a path. Skills are playbooks shipped with the agent, not owner
+ * data, so any principal who may converse may load one.
+ */
+export function loadSkillTool(skills: Skill[]): RegisteredTool {
+  const byName = new Map(skills.map((s) => [s.name.toLowerCase(), s]));
+  return defineTool({
+    name: LOAD_SKILL_TOOL,
+    label: "Load skill",
+    description: "Load the full instructions of a skill listed in <available_skills>, by its name.",
+    parameters: Type.Object({ name: Type.String({ description: "The skill's name, as listed in <available_skills>." }) }),
+    meta: { capabilities: ["converse"], group: "system", describe: (args) => `${LOAD_SKILL_TOOL} ${String((args as { name?: unknown }).name ?? "")}` },
+    execute: async ({ name }) => {
+      const skill = byName.get(name.trim().toLowerCase());
+      if (!skill) {
+        const known = [...byName.values()].map((s) => s.name).join(", ") || "none";
+        return { content: [{ type: "text", text: `No skill named "${name}". Known skills: ${known}.` }], isError: true };
+      }
+      return textResult(readFileSync(skill.filePath, "utf8"));
+    },
+  });
 }
