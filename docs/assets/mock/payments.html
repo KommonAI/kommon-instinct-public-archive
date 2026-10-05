@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>How the agent pays</title>
+<style>
+  :root{--ink:#111;--teal:#0F766E;--muted:#555;--blue:#1F8AFF}
+  *{box-sizing:border-box}
+  body{margin:0;background:#fff;font-family:-apple-system,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;color:var(--ink)}
+  .page{width:1600px;height:820px;padding:40px 56px;position:relative;display:grid;grid-template-columns:1fr 390px;gap:48px}
+  h1{font-size:34px;margin:0 0 4px;letter-spacing:-.01em}
+  .lead{margin:0 0 26px;color:var(--muted);font-size:18px}
+  .steps{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .step{border:3px solid var(--ink);border-radius:18px;padding:14px 16px;background:#fff;filter:url(#rough);display:flex;gap:14px;align-items:flex-start}
+  .num{flex:0 0 36px;width:36px;height:36px;border-radius:50%;background:var(--ink);color:#fff;font-weight:700;font-size:18px;display:flex;align-items:center;justify-content:center}
+  .step h3{margin:0 0 4px;font-size:18px;display:flex;align-items:center;gap:8px}
+  .step h3 img{width:26px;height:26px;border-radius:6px}
+  .step p{margin:0;font-size:15px;line-height:1.35;color:#222}
+  .rule{grid-column:1/3;border:3px dashed var(--teal);border-radius:18px;padding:14px 18px;background:#F8FAF9}
+  .rule .tag{font-size:14px;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:700;margin-bottom:6px}
+  .rule p{margin:0;font-size:15.5px;line-height:1.4}
+  .rule code{background:#fff;border:1px solid #D1D5DB;border-radius:6px;padding:1px 6px;font-size:14px}
+  .phone{width:390px;height:720px;background:#000;border-radius:54px;padding:14px;box-shadow:0 30px 60px rgba(0,0,0,.18);position:relative;align-self:center}
+  .screen{background:#fff;border-radius:42px;height:100%;overflow:hidden;display:flex;flex-direction:column}
+  .notch{position:absolute;top:14px;left:50%;transform:translateX(-50%);width:120px;height:34px;background:#000;border-radius:0 0 22px 22px;z-index:2}
+  .status{height:54px;display:flex;align-items:flex-end;justify-content:space-between;padding:0 28px 6px;font-size:15px;font-weight:600}
+  .header{text-align:center;padding:6px 16px 10px;border-bottom:1px solid #E5E5EA}
+  .avatar{width:44px;height:44px;border-radius:50%;margin:0 auto 4px;border:2px solid #111;display:flex;align-items:center;justify-content:center}
+  .avatar svg{width:30px;height:30px}
+  .name{font-size:12px}
+  .thread{flex:1;padding:12px 12px 8px;display:flex;flex-direction:column;gap:6px}
+  .b{max-width:80%;padding:9px 13px;border-radius:20px;font-size:15.5px;line-height:1.3}
+  .me{align-self:flex-end;background:var(--blue);color:#fff;border-bottom-right-radius:6px}
+  .them{align-self:flex-start;background:#E9E9EB;color:#111;border-bottom-left-radius:6px}
+  .ts{text-align:center;color:#8E8E93;font-size:12px;margin:6px 0 2px}
+  .compose{display:flex;padding:8px 12px 28px}.compose .field{flex:1;height:36px;border:1px solid #D1D1D6;border-radius:18px;color:#8E8E93;font-size:16px;padding:7px 14px}
+  .foot{position:absolute;bottom:26px;left:56px;right:56px;display:flex;justify-content:space-between;color:var(--muted);font-size:13.5px}
+</style></head>
+<body><div class="page">
+<svg width="0" height="0" style="position:absolute"><filter id="rough"><feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="4"/></filter></svg>
+<div>
+  <h1>How the agent pays</h1>
+  <p class="lead">The agent never holds your card. Every purchase is one single-use card, for one exact amount, that you approve first.</p>
+  <div class="steps">
+    <div class="step"><div class="num">1</div><div><h3>You ask</h3><p>"Buy the socks in my cart." The agent checks the spend policy you set: per-purchase and per-day limits, and what always needs a yes.</p></div></div>
+    <div class="step"><div class="num">2</div><div><h3><img src="../logos/maritime.png" alt="">Checkout on its desktop</h3><p>The agent drives the shop in its own browser, fills the cart, and stops at the final total: $23.40 at Everlane.</p></div></div>
+    <div class="step"><div class="num">3</div><div><h3><img src="../logos/stripe.png" alt="">Asks Link for a card</h3><p>It requests a one-time card from your Stripe Link wallet for exactly $23.40, with the merchant and the reason attached.</p></div></div>
+    <div class="step"><div class="num">4</div><div><h3>You approve on your phone</h3><p>Link sends you the approval. One tap. The agent gets a card that works once, for that amount, at that merchant.</p></div></div>
+    <div class="step"><div class="num">5</div><div><h3>It pays and tells you</h3><p>The card is typed into the checkout, the receipt goes to your files, the spend lands in the audit log. The card is dead after that.</p></div></div>
+    <div class="step"><div class="num">6</div><div><h3>No wallet connected?</h3><p>The agent still gets you to checkout, then hands you the live screen to pay yourself. Logins, 2FA and CAPTCHAs always go to you.</p></div></div>
+    <div class="rule"><div class="tag">Your spend policy, a file with tests</div><p><code>askAbove: 50</code> · <code>perActionUsd: 100</code> · <code>perDayUsd: 300</code> · <code>neverWithoutAsk: flights, hotels</code>. A partner's agent may buy with your approval; family, friends and strangers cannot spend at all.</p></div>
+  </div>
+</div>
+<div class="phone"><div class="notch"></div><div class="screen">
+  <div class="status"><span>5:48</span><span>●●●● ᯤ ▮</span></div>
+  <div class="header"><div class="avatar"><svg viewBox="0 0 100 100"><path d="M78 30 A34 34 0 1 1 62 22" fill="none" stroke="#111" stroke-width="9" stroke-linecap="round"/><circle cx="70" cy="26" r="5" fill="#0F766E"/></svg></div><div class="name">Instinct ›</div></div>
+  <div class="thread">
+    <div class="ts">Today 5:48 PM</div>
+    <div class="b me">Buy the socks in my cart</div>
+    <div class="b them">Everlane, 2 pairs, total $23.40 with shipping. That's under your $50 limit but it's a new merchant, so: approve the one-time card in Link?</div>
+    <div class="b them">link.com/approve/lsrq_8f2…</div>
+    <div class="ts">5:51 PM</div>
+    <div class="b me">Approved</div>
+    <div class="b them">Paid. Order EV-41822, arriving Thursday. Receipt is in your files. The card is already dead.</div>
+  </div>
+  <div class="compose"><div class="field">iMessage</div></div>
+</div></div>
+<div class="foot"><span>Stripe Link Agent Wallet, US and Canadian consumers. Payments package is optional.</span><span>github.com/mariagorskikh/open-instinct · MIT</span></div>
+</div></body></html>

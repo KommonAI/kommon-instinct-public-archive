@@ -6,7 +6,7 @@
 
 ## How it works
 
-<p align="center"><img src="docs/assets/brand/architecture.png" alt="You text Inkbox; the gateway wakes your agent on Maritime; a friend's agent talks to yours over A2A" width="900"></p>
+<p align="center"><img src="docs/assets/brand/architecture.png" alt="What happens when you text your agent, in five steps" width="900"></p>
 
 You text a phone number. [Inkbox](https://inkbox.ai) gives the agent that number, an email address and an agent-to-agent endpoint. A small gateway wakes your agent, which lives in its own microVM on [Maritime](https://maritime.sh) with a Linux desktop. Inside, a [Pi](https://github.com/earendil-works/pi) agent loop runs with your apps through [Composio](https://composio.dev), a wallet through [Stripe Link](https://docs.stripe.com/agentic-commerce/agents/link-agent-wallet), and a policy guard in front of every tool. Default model: Claude Fable 5.1. Any Pi provider works.
 
@@ -19,6 +19,12 @@ It writes real files, too: ask for a brief "as a PDF" and it creates one in its 
 <p align="center"><img src="docs/assets/brand/trust.png" alt="Six rings: owner, partner, family, friend, contact, stranger" width="820"></p>
 
 Six tiers, enforced in code before any tool runs. Your partner's agent can read your calendar. A friend's can only ask when you are free. A stranger gets a polite no, and you get a one-line text saying who asked for what. Grants add exceptions in plain English: "Sam can book us dinner this week." Details in [PERMISSIONS.md](docs/PERMISSIONS.md) and [PROTOCOL.md](docs/PROTOCOL.md).
+
+## Payments
+
+<p align="center"><img src="docs/assets/brand/payments.png" alt="How the agent pays: you ask, it reaches checkout on its desktop, asks Stripe Link for a one-time card for the exact amount, you approve on your phone, it pays and reports" width="1000"></p>
+
+The agent never holds your card. For each purchase it asks your Stripe Link wallet for a single-use card for the exact total, you approve with one tap, and the card is dead after the payment. Limits live in a spend policy file: ask above an amount, daily cap, and things that always need a yes. Without a wallet it still gets you to checkout and hands you the screen. Details: [PAYMENTS.md](docs/PAYMENTS.md).
 
 ## Quick start
 

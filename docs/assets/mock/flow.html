@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>What happens when you text your agent</title>
+<style>
+  :root{--ink:#111;--teal:#0F766E;--muted:#555;--blue:#1F8AFF}
+  *{box-sizing:border-box}
+  body{margin:0;background:#fff;font-family:-apple-system,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;color:var(--ink)}
+  .page{width:1600px;height:780px;padding:40px 56px;position:relative}
+  h1{font-size:34px;margin:0 0 4px;letter-spacing:-.01em}
+  .lead{margin:0 0 30px;color:var(--muted);font-size:18px}
+  .steps{display:grid;grid-template-columns:repeat(5,1fr);gap:0;align-items:stretch}
+  .step{position:relative;padding:0 26px 0 0;display:flex;flex-direction:column}
+  .step+.step{padding-left:26px}
+  .step+.step:before{content:"";position:absolute;left:-14px;top:64px;width:28px;height:28px;border-top:3px solid var(--ink);border-right:3px solid var(--ink);transform:rotate(45deg)}
+  .num{width:40px;height:40px;border-radius:50%;background:var(--ink);color:#fff;font-weight:700;font-size:20px;display:flex;align-items:center;justify-content:center;margin-bottom:12px}
+  .card{border:3px solid var(--ink);border-radius:18px;padding:16px 18px 18px;background:#fff;filter:url(#rough);flex:1}
+  .who{display:flex;align-items:center;gap:10px;font-weight:700;font-size:21px;margin-bottom:4px}
+  .who img{width:36px;height:36px;border-radius:8px;object-fit:contain}
+  .what{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:700;margin-bottom:10px}
+  .card p{margin:0 0 8px;font-size:16px;line-height:1.38}
+  .card p.ex{color:#333;background:#F3F4F6;border-radius:10px;padding:8px 10px;font-size:15px}
+  .bubble{display:inline-block;border-radius:16px;padding:8px 12px;font-size:15px;margin:2px 0}
+  .me{background:var(--blue);color:#fff;border-bottom-right-radius:5px}
+  .them{background:#E9E9EB;color:#111;border-bottom-left-radius:5px}
+  .friend{margin-top:26px;border:3px dashed var(--teal);border-radius:18px;padding:16px 20px;display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:center;background:#F8FAF9}
+  .friend .tag{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);font-weight:700}
+  .friend p{margin:4px 0 0;font-size:16px;line-height:1.4}
+  .ring{width:64px;height:64px}
+  .foot{position:absolute;bottom:26px;left:56px;right:56px;display:flex;justify-content:space-between;color:var(--muted);font-size:13.5px}
+</style></head>
+<body><div class="page">
+<svg width="0" height="0" style="position:absolute"><filter id="rough"><feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="7"/><feDisplacementMap in="SourceGraphic" scale="4"/></filter></svg>
+
+<h1>What happens when you text your agent</h1>
+<p class="lead">Five steps, five services. Each one is a separate package, so any of them can be swapped.</p>
+
+<div class="steps">
+  <div class="step"><div class="num">1</div><div class="card">
+    <div class="who">You</div><div class="what">text, call or email</div>
+    <p>You send a normal iMessage to your agent's number. No app, no login.</p>
+    <p class="ex"><span class="bubble me">Dinner with Sam this week, near the Mission</span></p>
+  </div></div>
+
+  <div class="step"><div class="num">2</div><div class="card">
+    <div class="who"><img src="../logos/inkbox.png" alt="">Inkbox</div><div class="what">the agent's phone line</div>
+    <p>Owns the agent's number, email address and agent-to-agent endpoint. Receives your message and forwards it as a signed webhook.</p>
+    <p class="ex">Signature checked on every message, so nobody can fake a text from you.</p>
+  </div></div>
+
+  <div class="step"><div class="num">3</div><div class="card">
+    <div class="who">Gateway</div><div class="what">wakes your agent</div>
+    <p>A tiny relay. Finds which agent belongs to you and wakes it. One gateway serves every user.</p>
+    <p class="ex">Not needed when you self-host on your own machine.</p>
+  </div></div>
+
+  <div class="step"><div class="num">4</div><div class="card">
+    <div class="who"><img src="../logos/maritime.png" alt="">Your agent</div><div class="what">its own computer</div>
+    <p>Runs in its own microVM on Maritime with a Linux desktop. Inside: <b>Pi</b> runs the loop, <b>Claude</b> thinks, <b>Composio</b> opens your Gmail and Calendar, <b>Stripe Link</b> pays when you approve.</p>
+    <p class="ex">Checks your calendar, asks Sam's agent for free evenings, finds a table.</p>
+  </div></div>
+
+  <div class="step"><div class="num">5</div><div class="card">
+    <div class="who">You</div><div class="what">get the answer</div>
+    <p>The reply comes back through Inkbox as an iMessage. Anything that costs money or needs a login is asked first.</p>
+    <p class="ex"><span class="bubble them">Sam can do Thu 7:30. Book Burma Love for 2? YES or NO</span></p>
+  </div></div>
+</div>
+
+<div class="friend">
+  <img class="ring" src="../logos/open-instinct.png" alt="">
+  <div><div class="tag">When a friend has an agent too</div>
+  <p>Your agent talks to Sam's agent directly (agent-to-agent, through Inkbox) instead of texting Sam. What it may ask depends on the tier you gave Sam: a partner's agent can read your calendar, a friend's only sees free/busy, a stranger's gets a polite no and you get told who asked.</p></div>
+</div>
+
+<div class="foot"><span>Same flow for SMS and email. Self-hosting skips the gateway and runs the agent on your laptop.</span><span>github.com/mariagorskikh/open-instinct · MIT</span></div>
+</div></body></html>
