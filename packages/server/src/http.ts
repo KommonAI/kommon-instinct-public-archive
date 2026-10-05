@@ -29,6 +29,8 @@ export interface ChatBuffer {
 export interface WalletCallback {
   handleCallback(code: string, state: string): Promise<void>;
   isConnected(): boolean;
+  /** Starts a PKCE flow; the server keeps the verifier. Optional so older stubs still fit. */
+  authorizeUrl?(): { url: string; state: string };
 }
 
 /** The slice of a boot() result the HTTP layer needs. Tests pass stubs. */
@@ -321,6 +323,15 @@ export function createHttpServer(app: HttpApp, opts: HttpServerOptions = {}): ht
 
     if (method === "GET" && (path === "/" || path === "/status")) return sendJson(res, 200, { ...statusJson(app), ...(inbox ? { inkboxInbox: inbox.queue.summary() } : {}) });
     if (method === "GET" && path === "/schedules") return sendJson(res, 200, app.scheduler.toMaritimeSchedules());
+    // `instinct payments connect | status`. Owner surface: the authorize URL starts a flow this server completes.
+    if (method === "GET" && path === "/oauth/link/start") {
+      if (!app.wallet?.authorizeUrl) return sendJson(res, 404, { error: "payments not configured" });
+      return sendJson(res, 200, { url: app.wallet.authorizeUrl().url });
+    }
+    if (method === "GET" && path === "/payments/status") {
+      if (!app.wallet) return sendJson(res, 404, { error: "payments not configured" });
+      return sendJson(res, 200, { connected: app.wallet.isConnected() });
+    }
 
     if (method === "POST" && path === "/chat") {
       const raw = await readBody(req, limit);
