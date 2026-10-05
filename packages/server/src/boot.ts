@@ -269,10 +269,9 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   const skillsDir = resolveSkillsDir({ explicit: opts.skillsDir, env, packageUrl: import.meta.url });
   const skillList = loadSkillList(skillsDir, log);
   const skills = formatSkillsIndex(skillList);
-  if (skills) {
-    promptSections.push(skills);
-    registry.register(loadSkillTool(skillList));
-  }
+  if (skills) promptSections.push(skills);
+  // Registered even when every skill is hidden: those load by name from a schedule or command.
+  if (skillList.length > 0) registry.register(loadSkillTool(skillList));
   const skillsPrompt = promptSections.length > 0 ? promptSections.join("\n\n") : undefined;
 
   const runtime = new AgentRuntime({

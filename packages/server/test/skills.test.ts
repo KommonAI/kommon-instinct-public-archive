@@ -60,4 +60,12 @@ describe("skills", () => {
       expect(textOf(r)).toContain("Known skills: dining");
     }
   });
+
+  it("leaves hidden skills out of the index but still loads them by name", async () => {
+    mkdirSync(join(dir, "nightly"));
+    writeFileSync(join(dir, "nightly", "SKILL.md"), "---\nname: nightly\ndescription: Nightly wrap-up\ndisable-model-invocation: true\n---\n\nWrap up the day.\n");
+    const list = loadSkillList(dir);
+    expect(loadSkillsPrompt(dir)).toBeUndefined();
+    expect(textOf(await loadSkillTool(list).spec.execute({ name: "nightly" }, stranger))).toContain("Wrap up the day.");
+  });
 });

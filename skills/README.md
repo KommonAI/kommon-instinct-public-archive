@@ -78,7 +78,8 @@ two things:
 
 - An `<available_skills>` block in the system prompt with each skill's name and
   description, telling the model to call `load_skill` when a task matches.
-  Skills with `disable-model-invocation: true` are left out of the block.
+  Skills with `disable-model-invocation: true` are left out of the block,
+  but `load_skill` still loads them by name (from a schedule or a command).
 - The `load_skill` tool. It takes a skill name and returns that skill's
   `SKILL.md`. Only skills found at boot can be named, so the model never passes
   a path. It needs only the `converse` capability, so skills work in every
