@@ -55,13 +55,13 @@ export const HELP_GROUPS: HelpGroup[] = [
       {
         name: "chat",
         usage: 'chat "<message>" [--url http://127.0.0.1:8080] [--agent <maritimeAgentId>] [--conversation <id>]',
-        summary: "Send one message to a running agent, locally or through api.maritime.sh.",
+        summary: "Send one message to a running agent, locally or through api.maritime.sh. Sends INSTINCT_CHAT_TOKEN when set.",
         example: 'instinct chat "what is on my calendar tomorrow"',
       },
       {
         name: "status",
         usage: "status [--url http://127.0.0.1:8080]",
-        summary: "Show what a running server reports on GET /.",
+        summary: "Show what a running server reports on GET /. Sends INSTINCT_CHAT_TOKEN when set.",
         example: "instinct status",
       },
     ],
