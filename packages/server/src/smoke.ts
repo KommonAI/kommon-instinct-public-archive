@@ -46,7 +46,7 @@ async function main(): Promise<void> {
     INSTINCT_OWNER_NAME: "Smoke Owner",
     INSTINCT_OWNER_PHONE: OWNER_PHONE,
     INSTINCT_OWNER_EMAIL: "owner@example.com",
-    INSTINCT_TIMEZONE: "America/New_York",
+    INSTINCT_OWNER_TIMEZONE: "America/New_York",
     INSTINCT_AGENT_NAME: "Smoke",
     INSTINCT_MODEL: "faux/faux-1",
     INSTINCT_COMPUTER: "none",
