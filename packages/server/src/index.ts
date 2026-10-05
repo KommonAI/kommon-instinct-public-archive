@@ -40,6 +40,6 @@ export { paymentsEnv, loadPaymentsModule, PAYMENTS_PACKAGE, LINK_CALLBACK_PATH }
 export type { PaymentsModule, PaymentsEnv, LinkWalletLike, LinkWalletOptions, PaymentsToolDeps } from "./payments.js";
 export { createScheduleSync, schedulesEndpoint } from "./maritime-schedules.js";
 export type { ScheduleSync, ScheduleSyncOptions } from "./maritime-schedules.js";
-export { loadSkillsPrompt, resolveSkillsDir } from "./skills.js";
+export { LOAD_SKILL_TOOL, formatSkillsIndex, loadSkillList, loadSkillTool, loadSkillsPrompt, resolveSkillsDir } from "./skills.js";
 export { ensureWebhookSubscription, readWebhookSecrets, writeWebhookSecrets } from "./webhook-setup.js";
 export type { EnsureWebhookOptions, EnsureWebhookResult, WebhookSecrets } from "./webhook-setup.js";

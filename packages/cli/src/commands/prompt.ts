@@ -72,7 +72,8 @@ export async function ownerPromptInput(ctx: CliContext, opts: PromptPreviewOptio
     channel: opts.channel ?? "imessage",
     now: opts.now ?? new Date(),
     capabilities: ALL_CAPABILITIES.filter((cap) => policy.canEver(owner, cap)),
-    toolGroups: SAMPLE_OWNER_TOOL_GROUPS,
+    // load_skill sits in the system group, so the preview lists it whenever skills are shown.
+    toolGroups: skills ? [...SAMPLE_OWNER_TOOL_GROUPS, "system"] : SAMPLE_OWNER_TOOL_GROUPS,
     memoryDigest: new MemoryStore(state).digest(4000, opts.now ?? new Date()),
     persona: readPersona(state),
     instructions: readAgentsInstructions(state),
