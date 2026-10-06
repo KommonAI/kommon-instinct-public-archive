@@ -1073,6 +1073,25 @@ describe("restoreMessages", () => {
     const restored = restoreMessages([user(1), assistant(1), user(2), orphan], new Date());
     expect(restored.map((m) => m.role)).toEqual(["user", "assistant", "user"]);
   });
+
+  const call = (id: string): AgentMessage => ({ ...assistant(5), content: [{ type: "toolCall", id, name: "computer", arguments: {} }] }) as AgentMessage;
+  const result = (id: string, text = "ok"): AgentMessage => ({ role: "toolResult", toolCallId: id, toolName: "computer", content: [{ type: "text", text }], isError: false, timestamp: 5 }) as AgentMessage;
+
+  it("never keeps a tool result without its call when one long turn has to be cut mid-way", () => {
+    const big = "x".repeat(20_000);
+    const stored: AgentMessage[] = [user(1)];
+    for (let i = 0; i < 20; i++) stored.push(call(`t${i}`), result(`t${i}`, big));
+    const restored = restoreMessages(stored, new Date(), 60, 100_000);
+    const callIds = new Set(restored.flatMap((m) => (m.role === "assistant" ? m.content.filter((c) => c.type === "toolCall").map((c) => c.id) : [])));
+    for (const m of restored) if (m.role === "toolResult") expect(callIds.has(m.toolCallId)).toBe(true);
+    expect(restored[1]!.role).not.toBe("toolResult");
+  });
+
+  it("heals a saved transcript that starts with an orphaned tool result", () => {
+    const summary: AgentMessage = { role: "user", content: [{ type: "text", text: "[Conversation summary] earlier" }], timestamp: 1 };
+    const restored = restoreMessages([summary, result("gone"), call("t1"), result("t1"), assistant(2), user(3)], new Date());
+    expect(restored.map((m) => m.role)).toEqual(["user", "assistant", "toolResult", "assistant", "user"]);
+  });
 });
 
 describe("runScheduled", () => {

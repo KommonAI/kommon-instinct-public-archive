@@ -1084,7 +1084,7 @@ export function restoreMessages(stored: AgentMessage[], now: Date, keep = SESSIO
     if (next >= messages.length || next === start) break;
     start = next;
   }
-  if (start <= 0) return messages;
+  if (start <= 0) return dropOrphanToolResults(messages);
 
   const older = messages.slice(0, start);
   const summary: AgentMessage = {
@@ -1092,7 +1092,7 @@ export function restoreMessages(stored: AgentMessage[], now: Date, keep = SESSIO
     content: [{ type: "text", text: summarizeMessages(older) }],
     timestamp: now.getTime(),
   };
-  return [summary, ...messages.slice(start)];
+  return [summary, ...dropOrphanToolResults(messages.slice(start))];
 }
 
 /**
@@ -1139,6 +1139,21 @@ function dropOrphanToolCalls(messages: AgentMessage[]): AgentMessage[] {
     }
   }
   return messages.slice(0, end);
+}
+
+/**
+ * Drop tool results whose call is not in the slice. A fold that has to cut inside one long
+ * turn (no user message to cut at) can keep a result and lose its call, and the provider
+ * rejects every later request on that transcript. Also heals transcripts saved that way.
+ */
+function dropOrphanToolResults(messages: AgentMessage[]): AgentMessage[] {
+  const callIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    for (const c of m.content) if (c.type === "toolCall") callIds.add(c.id);
+  }
+  const kept = messages.filter((m) => m.role !== "toolResult" || callIds.has(m.toolCallId));
+  return kept.length === messages.length ? messages : kept;
 }
 
 function summarizeMessages(older: AgentMessage[]): string {
