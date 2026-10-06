@@ -20,16 +20,28 @@ export function localDate(d: Date, tz: string): string {
   return fmt.format(d);
 }
 
+export interface AuditLogOptions {
+  /** Called after each entry is written, e.g. to echo errors to the process log. Must not throw. */
+  onAppend?: (entry: AuditEntry) => void;
+}
+
 export class AuditLog {
   private readonly state: StateDir;
+  private readonly onAppend?: (entry: AuditEntry) => void;
 
-  constructor(state: StateDir) {
+  constructor(state: StateDir, opts: AuditLogOptions = {}) {
     this.state = state;
+    this.onAppend = opts.onAppend;
   }
 
   append(entry: Omit<AuditEntry, "at">): void {
     const full: AuditEntry = { at: new Date().toISOString(), ...entry };
     this.state.appendLine(FILE, JSON.stringify(full));
+    try {
+      this.onAppend?.(full);
+    } catch {
+      // a logging hook must never break the audit trail
+    }
   }
 
   /** Oldest first. `limit` keeps the most recent N after filtering. */

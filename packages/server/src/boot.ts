@@ -84,7 +84,12 @@ export async function boot(env: NodeJS.ProcessEnv, opts: BootOptions = {}): Prom
   // PERSONA.md is the owner's file; INSTINCT_PERSONA seeds it on first boot only.
   if (ensurePersona(state, env.INSTINCT_PERSONA)) log(`wrote ${state.path("PERSONA.md")}${env.INSTINCT_PERSONA?.trim() ? " from INSTINCT_PERSONA" : " (default persona)"}`);
 
-  const audit = new AuditLog(state);
+  // Errors land in audit.jsonl; echo them to the process log too so they show up in the host's logs.
+  const audit = new AuditLog(state, {
+    onAppend: (e) => {
+      if (e.kind === "error") log(`error (${e.conversationKey}): ${String(e.detail.message ?? JSON.stringify(e.detail))}`);
+    },
+  });
   const policy = new PolicyEngine(loadPolicy(state), {
     spentTodayUsd: () => audit.spentTodayUsd(config.owner.timezone),
   });

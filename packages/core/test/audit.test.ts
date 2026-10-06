@@ -30,6 +30,16 @@ describe("AuditLog", () => {
     expect(all[1]).toMatchObject({ kind: "tool_call", conversationKey: "chat:1", detail: { tool: "web_search" } });
   });
 
+  it("calls onAppend after writing, and a throwing hook does not break the log", () => {
+    const state = tempState();
+    const seen: string[] = [];
+    const log = new AuditLog(state, { onAppend: (e) => { seen.push(e.kind); if (e.kind === "error") throw new Error("hook"); } });
+    log.append({ kind: "error", principal: "owner", detail: { message: "boom" } });
+    log.append({ kind: "inbound", principal: "owner", detail: {} });
+    expect(seen).toEqual(["error", "inbound"]);
+    expect(log.read().map((e) => e.kind)).toEqual(["error", "inbound"]);
+  });
+
   it("filters by kind and since, and limit keeps the newest", () => {
     const state = tempState();
     const log = new AuditLog(state);
