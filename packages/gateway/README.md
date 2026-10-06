@@ -46,6 +46,7 @@ Validation: phone must normalize to E.164 (`+14155550123`; a bare 10-digit US nu
 | `COMPOSIO_API_KEY` | no | Passed to every new agent as a secret env var; enables Gmail, Calendar and the other Composio toolkits |
 | `COMPOSIO_TOOLKITS` | no | Comma-separated toolkit slugs sent with the key. Default `gmail,googlecalendar,googlecontacts`. The agent only enables apps when this is non-empty, so the gateway always sends it alongside the key |
 | `LINK_CLIENT_ID`, `LINK_CLIENT_SECRET`, `STRIPE_PUBLISHABLE_KEY` | no | Stripe Link Agent Wallet credentials. When `LINK_CLIENT_ID` is set, all three are copied into each agent's env (the secret marked secret) together with `LINK_REDIRECT_URI=<GATEWAY_PUBLIC_URL>/oauth/link/callback/<userId>` |
+| `INSTINCT_MODEL`, `INSTINCT_OWNER_TIMEZONE`, `INSTINCT_AGENT_NAME`, `INSTINCT_PERSONA`, `BRAVE_SEARCH_API_KEY` | no | Copied into every new agent. The agent seeds `config.json` from them on first boot, so set them before signup. |
 | `GATEWAY_DATA_DIR` | no | Where `users.json` lives. Default `./.instinct-gateway`. Mount a volume here |
 | `PORT` | no | Default `8787`. Railway injects its own |
 | `MARITIME_API_URL`, `INKBOX_BASE_URL` | no | Override the API hosts (staging, tests) |

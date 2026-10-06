@@ -6,6 +6,19 @@ import { UserStore } from "./store.js";
 
 export const DEFAULT_AGENT_IMAGE = "ghcr.io/mariagorskikh/open-instinct-agent:latest";
 
+/**
+ * Agent settings the gateway copies from its own environment into every agent it creates.
+ * The agent seeds config.json from these on first boot, and config.json wins after that, so
+ * a value set here is the only way to get it right without editing /data in the VM.
+ */
+export const AGENT_ENV_PASSTHROUGH = [
+  "INSTINCT_MODEL",
+  "INSTINCT_OWNER_TIMEZONE",
+  "INSTINCT_AGENT_NAME",
+  "INSTINCT_PERSONA",
+  "BRAVE_SEARCH_API_KEY",
+] as const;
+
 export interface GatewayEnv {
   port: number;
   publicUrl: string;
@@ -27,6 +40,8 @@ export interface GatewayEnv {
   useMaritimeLlm: boolean;
   maritimeModel?: string;
   link?: LinkPassthrough;
+  /** AGENT_ENV_PASSTHROUGH values found in the gateway's environment. */
+  agentEnv: Record<string, string>;
 }
 
 function truthy(v: string | undefined): boolean {
@@ -48,6 +63,11 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
         ...(env["STRIPE_PUBLISHABLE_KEY"] ? { stripePublishableKey: env["STRIPE_PUBLISHABLE_KEY"] } : {}),
       }
     : undefined;
+  const agentEnv: Record<string, string> = {};
+  for (const key of AGENT_ENV_PASSTHROUGH) {
+    const value = env[key]?.trim();
+    if (value) agentEnv[key] = value;
+  }
   return {
     port,
     publicUrl,
@@ -67,6 +87,7 @@ export function readEnv(env: NodeJS.ProcessEnv): GatewayEnv {
     useMaritimeLlm: truthy(env["INSTINCT_USE_MARITIME_LLM"]),
     maritimeModel: env["INSTINCT_MARITIME_MODEL"] || undefined,
     link,
+    agentEnv,
   };
 }
 
@@ -116,6 +137,7 @@ export function startGateway(cfg: GatewayEnv): GatewayServer {
       idleTtlSeconds: cfg.idleTtlSeconds,
       useMaritimeLlm: cfg.useMaritimeLlm,
       maritimeModel: cfg.maritimeModel,
+      extraEnv: cfg.agentEnv,
     },
     signupSecret: cfg.signupSecret,
     anthropicApiKey: cfg.anthropicApiKey,

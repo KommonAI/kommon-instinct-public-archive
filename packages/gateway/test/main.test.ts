@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_AGENT_IMAGE, checkSignupPolicy, readEnv } from "../src/main.js";
+import { AGENT_ENV_PASSTHROUGH, DEFAULT_AGENT_IMAGE, checkSignupPolicy, readEnv } from "../src/main.js";
 
 describe("readEnv", () => {
   it("requires MARITIME_API_KEY and reads the signup, Composio, Maritime LLM and Link settings", () => {
@@ -29,6 +29,24 @@ describe("readEnv", () => {
     expect(plain.allowOpenSignup).toBe(false);
     expect(plain.useMaritimeLlm).toBe(false);
     expect(plain.link).toBeUndefined();
+    expect(plain.agentEnv).toEqual({});
+  });
+
+  it("collects the agent settings it passes through, and nothing else", () => {
+    const cfg = readEnv({
+      MARITIME_API_KEY: "mk",
+      INSTINCT_MODEL: " anthropic/claude-sonnet-5-5 ",
+      INSTINCT_OWNER_TIMEZONE: "America/New_York",
+      BRAVE_SEARCH_API_KEY: "brv",
+      INSTINCT_PERSONA: "",
+      INKBOX_ADMIN_API_KEY: "ak",
+    });
+    expect(cfg.agentEnv).toEqual({
+      INSTINCT_MODEL: "anthropic/claude-sonnet-5-5",
+      INSTINCT_OWNER_TIMEZONE: "America/New_York",
+      BRAVE_SEARCH_API_KEY: "brv",
+    });
+    expect(Object.keys(cfg.agentEnv).every((k) => (AGENT_ENV_PASSTHROUGH as readonly string[]).includes(k))).toBe(true);
   });
 });
 
